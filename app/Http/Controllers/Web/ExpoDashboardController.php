@@ -21,7 +21,8 @@ use Illuminate\View\View;
 class ExpoDashboardController extends Controller
 {
     /**
-     * Helper untuk downsampling data agar grafik rentang waktu tetap rapi, cepat, dan tidak overload.
+     * Helper untuk downsampling data menggunakan Bucket Averaging
+     * agar grafik rentang waktu stabil, mulus (tanpa jitter/lonjakan aliasing acak), dan presisi.
      */
     private function samplePoints(Collection $items, int $targetCount = 75): Collection
     {
@@ -30,18 +31,27 @@ class ExpoDashboardController extends Controller
             return $items;
         }
 
-        $step = $count / $targetCount;
+        $chunkSize = $count / $targetCount;
         $sampled = collect();
+
         for ($i = 0; $i < $targetCount; $i++) {
-            $index = (int) floor($i * $step);
-            if ($items->has($index)) {
-                $sampled->push($items->get($index));
+            $start = (int) floor($i * $chunkSize);
+            $len   = (int) ceil($chunkSize);
+            $chunk = $items->slice($start, $len);
+
+            if ($chunk->isNotEmpty()) {
+                $lastChunkItem = $chunk->last();
+                $sampledItem = clone $lastChunkItem;
+                $sampledItem->temperature = round((float) $chunk->avg('temperature'), 2);
+                $sampledItem->humidity    = round((float) $chunk->avg('humidity'), 2);
+                $sampled->push($sampledItem);
             }
         }
 
-        // Pastikan titik data paling akhir selalu ikut masuk
+        // Pastikan titik data paling akhir selalu nilai aktual terkini
         $lastItem = $items->last();
-        if ($lastItem && $sampled->last()?->id !== $lastItem->id) {
+        if ($lastItem && $sampled->isNotEmpty() && $sampled->last()?->id !== $lastItem->id) {
+            $sampled->pop();
             $sampled->push($lastItem);
         }
 
