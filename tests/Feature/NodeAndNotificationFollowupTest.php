@@ -466,7 +466,7 @@ class NodeAndNotificationFollowupTest extends TestCase
             'test_complete'        => false,
         ];
 
-        $linkRes = $this->mqttCommand->handleNodeLinkMetrics("room/{$this->room->id}/node/link_metrics", json_encode($linkPayload));
+        $linkRes = $this->mqttCommand->handleNodeLinkMetrics("room/{$this->room->id}/node/link-metrics", json_encode($linkPayload));
         $this->assertTrue($linkRes);
 
         // Verifikasi sampel tersimpan dan membuktikan perangkat aktif (failed_total naik, pdr=0%, rssi null)
@@ -785,12 +785,153 @@ class NodeAndNotificationFollowupTest extends TestCase
             'rssi_dbm'             => -68,
             'test_complete'        => false,
         ]);
-        $this->assertTrue($this->mqttCommand->handleNodeLinkMetrics("room/{$this->room->id}/node/link_metrics", $linkMsg));
+        $this->assertTrue($this->mqttCommand->handleNodeLinkMetrics("room/{$this->room->id}/node/link-metrics", $linkMsg));
         $this->assertDatabaseHas('node_link_samples', [
             'room_id'       => $this->room->id,
             'session_id'    => 8877,
             'telemetry_seq' => 1,
             'pdr'           => 100.0,
         ]);
+    }
+
+    // ── 16. Offline valid tidak boleh dibatalkan oleh riwayat true lama ───────
+    #[Test]
+    public function valid_offline_is_not_cancelled_by_older_true_ac_log(): void
+    {
+        Bus::fake();
+
+        $baselineTime = Carbon::now();
+
+        // 1. AcLog node_connected=true pada now()-5 detik
+        Carbon::setTestNow($baselineTime->copy()->subSeconds(5));
+        AcLog::create([
+            'room_id'          => $this->room->id,
+            'ac_brand'         => $this->room->ac_brand,
+            'power'            => 'ON',
+            'setpoint'         => 24,
+            'mode'             => 'FUZZY',
+            'ac_mode'          => 'COOL',
+            'fan_speed'        => 'AUTO',
+            'swing'            => 'AUTO',
+            'control_source'   => 'USER_NODE',
+            'node_paired'      => true,
+            'node_connected'   => true,
+            'node_battery_low' => false,
+        ]);
+
+        // 2. AcLog yang lebih baru dengan node_connected=false pada now()
+        Carbon::setTestNow($baselineTime);
+        AcLog::create([
+            'room_id'          => $this->room->id,
+            'ac_brand'         => $this->room->ac_brand,
+            'power'            => 'ON',
+            'setpoint'         => 24,
+            'mode'             => 'FUZZY',
+            'ac_mode'          => 'COOL',
+            'fan_speed'        => 'AUTO',
+            'swing'            => 'AUTO',
+            'control_source'   => 'USER_NODE',
+            'node_paired'      => true,
+            'node_connected'   => false,
+            'node_battery_low' => false,
+        ]);
+
+        // 3. Proses NODE_OFFLINE dengan offline_for_ms=60000
+        $payload = json_encode([
+            'type'               => 'NODE_OFFLINE',
+            'room_id'            => (string) $this->room->id,
+            'message'            => 'Node sensor terputus; sumber dipindahkan ke Remote',
+            'offline_for_ms'     => 60000,
+            'offline_timeout_ms' => 60000,
+        ]);
+
+        $res = $this->mqttCommand->handleNotification("room/{$this->room->id}/notification", $payload);
+        $this->assertTrue($res);
+
+        // 4. Pastikan notifikasi tersimpan dan FCM dikirim
+        $this->assertDatabaseHas('notifications', [
+            'room_id' => $this->room->id,
+            'type'    => 'NODE_OFFLINE',
+            'title'   => 'Node Sensor Terputus',
+        ]);
+
+        Bus::assertDispatched(SendFcmNotificationJob::class);
+
+        $latestLog = AcLog::where('room_id', $this->room->id)->latest('created_at')->first();
+        $this->assertEquals('REMOTE', $latestLog->control_source);
+        $this->assertFalse($latestLog->node_connected);
+
+        Carbon::setTestNow();
+    }
+
+    // ── 17. Event stale harus dibatalkan setelah Node pulih ───────────────────
+    #[Test]
+    public function stale_offline_event_is_cancelled_after_node_recovers(): void
+    {
+        Bus::fake();
+
+        $baselineTime = Carbon::now();
+
+        // 1. AcLog node_connected=false terlebih dahulu pada now()-10 detik
+        Carbon::setTestNow($baselineTime->copy()->subSeconds(10));
+        AcLog::create([
+            'room_id'          => $this->room->id,
+            'ac_brand'         => $this->room->ac_brand,
+            'power'            => 'ON',
+            'setpoint'         => 24,
+            'mode'             => 'MANUAL',
+            'ac_mode'          => 'COOL',
+            'fan_speed'        => 'AUTO',
+            'swing'            => 'AUTO',
+            'control_source'   => 'REMOTE',
+            'node_paired'      => true,
+            'node_connected'   => false,
+            'node_battery_low' => false,
+        ]);
+
+        // 2. AcLog terbaru dengan node_connected=true pada now()-2 detik (Node pulih)
+        Carbon::setTestNow($baselineTime->copy()->subSeconds(2));
+        AcLog::create([
+            'room_id'          => $this->room->id,
+            'ac_brand'         => $this->room->ac_brand,
+            'power'            => 'ON',
+            'setpoint'         => 24,
+            'mode'             => 'FUZZY',
+            'ac_mode'          => 'COOL',
+            'fan_speed'        => 'AUTO',
+            'swing'            => 'AUTO',
+            'control_source'   => 'USER_NODE',
+            'node_paired'      => true,
+            'node_connected'   => true,
+            'node_battery_low' => false,
+        ]);
+
+        Carbon::setTestNow($baselineTime);
+
+        // 3. Proses NODE_OFFLINE lama (tertunda dari sebelum pulih)
+        $payload = json_encode([
+            'type'               => 'NODE_OFFLINE',
+            'room_id'            => (string) $this->room->id,
+            'message'            => 'Node sensor terputus lama',
+            'offline_for_ms'     => 60000,
+            'offline_timeout_ms' => 60000,
+        ]);
+
+        $res = $this->mqttCommand->handleNotification("room/{$this->room->id}/notification", $payload);
+        $this->assertTrue($res);
+
+        // 4. Pastikan tidak ada notifikasi dan FCM tidak dikirim
+        $this->assertDatabaseMissing('notifications', [
+            'room_id' => $this->room->id,
+            'type'    => 'NODE_OFFLINE',
+        ]);
+
+        Bus::assertNotDispatched(SendFcmNotificationJob::class);
+
+        $latestLog = AcLog::where('room_id', $this->room->id)->latest('created_at')->first();
+        $this->assertEquals('USER_NODE', $latestLog->control_source);
+        $this->assertTrue($latestLog->node_connected);
+
+        Carbon::setTestNow();
     }
 }

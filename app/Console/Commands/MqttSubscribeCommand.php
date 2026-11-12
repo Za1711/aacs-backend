@@ -655,7 +655,10 @@ class MqttSubscribeCommand extends Command
         // HANDLER 3: NODE_OFFLINE
         // ==========================================
         if ($type === 'NODE_OFFLINE') {
-            $confirmSeconds = (int) config('aacs.node_offline_confirm_seconds', 60);
+            $confirmSeconds = max(
+                60,
+                (int) config('aacs.node_offline_confirm_seconds', 60)
+            );
             $minOfflineMs   = $confirmSeconds * 1000;
 
             // 1. Validasi offline_for_ms jika tersedia (firmware terbaru)
@@ -698,13 +701,16 @@ class MqttSubscribeCommand extends Command
                 return true;
             }
 
-            // Sumber kontak 4: AcLog terbaru dengan node_connected = true
-            $latestConnectedAcLog = AcLog::where('room_id', $roomId)
-                ->where('node_connected', true)
+            // Sumber kontak 4: AcLog terbaru secara keseluruhan (hanya dibatalkan jika status TERBARU bernilai node_connected=true)
+            $latestAcLog = AcLog::where('room_id', $roomId)
                 ->latest('created_at')
                 ->first();
-            if ($latestConnectedAcLog && $isRecentContact($latestConnectedAcLog->created_at)) {
-                Log::info("[NOTIFICATION] Event NODE_OFFLINE diabaikan untuk room {$roomId}: terdapat bukti kontak AcLog (node_connected=true) terbaru ({$latestConnectedAcLog->created_at}).");
+            if (
+                $latestAcLog
+                && $latestAcLog->node_connected === true
+                && $isRecentContact($latestAcLog->created_at)
+            ) {
+                Log::info("[NOTIFICATION] Event NODE_OFFLINE diabaikan untuk room {$roomId}: AcLog terbaru masih berstatus node_connected=true ({$latestAcLog->created_at}).");
                 return true;
             }
 
