@@ -185,13 +185,13 @@ class MqttSubscribeCommand extends Command
             return false;
         }
 
-        if (($data['version'] ?? null) !== 1) {
-            Log::warning("[REMOTE TELEMETRY] Versi tidak didukung untuk room {$roomId}: " . ($data['version'] ?? 'null'));
+        if (!array_key_exists('version', $data) || !is_int($data['version']) || $data['version'] !== 1) {
+            Log::warning("[REMOTE TELEMETRY] Versi tidak didukung untuk room {$roomId}: " . var_export($data['version'] ?? null, true));
             return false;
         }
 
-        if (strtoupper(trim((string)($data['source'] ?? ''))) !== 'REMOTE') {
-            Log::warning("[REMOTE TELEMETRY] Source bukan REMOTE untuk room {$roomId}: " . ($data['source'] ?? 'null'));
+        if (!array_key_exists('source', $data) || strtoupper(trim((string)$data['source'])) !== 'REMOTE') {
+            Log::warning("[REMOTE TELEMETRY] Source bukan REMOTE untuk room {$roomId}: " . var_export($data['source'] ?? null, true));
             return false;
         }
 
@@ -206,8 +206,13 @@ class MqttSubscribeCommand extends Command
         $hum = null;
 
         if ($data['valid'] === true) {
-            $suhu = $data['suhu'] ?? null;
-            $kelembaban = $data['kelembaban'] ?? null;
+            if (!array_key_exists('suhu', $data) || !array_key_exists('kelembaban', $data)) {
+                Log::warning("[REMOTE TELEMETRY] Suhu dan kelembaban wajib tersedia untuk valid=true pada room {$roomId}");
+                return false;
+            }
+
+            $suhu = $data['suhu'];
+            $kelembaban = $data['kelembaban'];
 
             $isSuhuValid = is_numeric($suhu) && is_finite($suhu) && $suhu >= -40 && $suhu <= 125;
             $isHumValid = is_numeric($kelembaban) && is_finite($kelembaban) && $kelembaban >= 0 && $kelembaban <= 100;
@@ -221,13 +226,14 @@ class MqttSubscribeCommand extends Command
             $temp = round((float) $suhu, 2);
             $hum = round((float) $kelembaban, 2);
         } else {
-            // valid=false mewajibkan suhu dan kelembapan null
-            if (isset($data['suhu']) && $data['suhu'] !== null) {
-                Log::warning("[REMOTE TELEMETRY] Suhu harus null jika valid=false pada room {$roomId}");
+            // valid=false mewajibkan key suhu dan kelembaban tersedia serta nilainya null
+            // Gunakan array_key_exists(), bukan hanya isset()
+            if (!array_key_exists('suhu', $data) || $data['suhu'] !== null) {
+                Log::warning("[REMOTE TELEMETRY] Key 'suhu' wajib ada dan bernilai null jika valid=false pada room {$roomId}");
                 return false;
             }
-            if (isset($data['kelembaban']) && $data['kelembaban'] !== null) {
-                Log::warning("[REMOTE TELEMETRY] Kelembaban harus null jika valid=false pada room {$roomId}");
+            if (!array_key_exists('kelembaban', $data) || $data['kelembaban'] !== null) {
+                Log::warning("[REMOTE TELEMETRY] Key 'kelembaban' wajib ada dan bernilai null jika valid=false pada room {$roomId}");
                 return false;
             }
             $isValid = false;
@@ -398,21 +404,21 @@ class MqttSubscribeCommand extends Command
             return false;
         }
 
-        // Version check: jika ada, wajib integer 1
-        if (array_key_exists('version', $data)) {
-            if (!is_int($data['version']) || $data['version'] !== 1) {
-                Log::warning("[NODE TELEMETRY] Versi harus integer 1 untuk room {$roomId}");
-                return false;
-            }
+        // Version check: version wajib tersedia, wajib integer, dan tepat 1
+        if (!array_key_exists('version', $data) || !is_int($data['version']) || $data['version'] !== 1) {
+            Log::warning("[NODE TELEMETRY] Versi wajib integer 1 untuk room {$roomId}");
+            return false;
         }
 
-        // Source check: jika ada, wajib USER_NODE atau alias NODE
-        if (array_key_exists('source', $data)) {
-            $rawSource = strtoupper(trim((string)$data['source']));
-            if ($rawSource !== 'USER_NODE' && $rawSource !== 'NODE') {
-                Log::warning("[NODE TELEMETRY] Source harus USER_NODE atau NODE untuk room {$roomId}: {$rawSource}");
-                return false;
-            }
+        // Source check: source wajib tersedia dan bernilai USER_NODE atau alias NODE
+        if (!array_key_exists('source', $data)) {
+            Log::warning("[NODE TELEMETRY] Source wajib tersedia untuk room {$roomId}");
+            return false;
+        }
+        $rawSource = strtoupper(trim((string)$data['source']));
+        if ($rawSource !== 'USER_NODE' && $rawSource !== 'NODE') {
+            Log::warning("[NODE TELEMETRY] Source harus USER_NODE atau NODE untuk room {$roomId}: {$rawSource}");
+            return false;
         }
 
         // Valid check: wajib boolean murni
@@ -427,8 +433,13 @@ class MqttSubscribeCommand extends Command
         $hum = null;
 
         if ($data['valid'] === true) {
-            $suhu = $data['suhu'] ?? null;
-            $kelembaban = $data['kelembaban'] ?? null;
+            if (!array_key_exists('suhu', $data) || !array_key_exists('kelembaban', $data)) {
+                Log::warning("[NODE TELEMETRY] Suhu dan kelembaban wajib tersedia untuk valid=true pada room {$roomId}");
+                return false;
+            }
+
+            $suhu = $data['suhu'];
+            $kelembaban = $data['kelembaban'];
 
             $isSuhuValid = is_numeric($suhu) && is_finite($suhu) && $suhu >= -40 && $suhu <= 125;
             $isHumValid = is_numeric($kelembaban) && is_finite($kelembaban) && $kelembaban >= 0 && $kelembaban <= 100;
@@ -442,13 +453,14 @@ class MqttSubscribeCommand extends Command
             $temp = round((float) $suhu, 2);
             $hum = round((float) $kelembaban, 2);
         } else {
-            // valid=false mewajibkan suhu/RH null
-            if (isset($data['suhu']) && $data['suhu'] !== null) {
-                Log::warning("[NODE TELEMETRY] Suhu harus null jika valid=false pada room {$roomId}");
+            // valid=false mewajibkan key suhu dan kelembaban tersedia serta nilainya null
+            // Jangan menerima key yang hilang sebagai ekuivalen null
+            if (!array_key_exists('suhu', $data) || $data['suhu'] !== null) {
+                Log::warning("[NODE TELEMETRY] Key 'suhu' wajib ada dan bernilai null jika valid=false pada room {$roomId}");
                 return false;
             }
-            if (isset($data['kelembaban']) && $data['kelembaban'] !== null) {
-                Log::warning("[NODE TELEMETRY] Kelembaban harus null jika valid=false pada room {$roomId}");
+            if (!array_key_exists('kelembaban', $data) || $data['kelembaban'] !== null) {
+                Log::warning("[NODE TELEMETRY] Key 'kelembaban' wajib ada dan bernilai null jika valid=false pada room {$roomId}");
                 return false;
             }
             $isValid = false;
@@ -1287,12 +1299,22 @@ class MqttSubscribeCommand extends Command
             $rssiDbm = null;
         }
 
-        // 7.1 Validasi sensor link metrics (backward-compatible)
+        // 7.1 Validasi sensor link metrics (backward-compatible & strict modern)
+        $hasSensorValid = array_key_exists('sensor_valid', $data);
+        $hasTempC       = array_key_exists('temperature_c', $data);
+        $hasHumPct      = array_key_exists('humidity_percent', $data);
+
         $sensorValid = false;
         $tempC = null;
         $humPct = null;
 
-        if (array_key_exists('sensor_valid', $data)) {
+        if (!$hasSensorValid && !$hasTempC && !$hasHumPct) {
+            // Payload legacy: tidak memiliki ketiga field sensor sama sekali
+            $sensorValid = false;
+            $tempC = null;
+            $humPct = null;
+        } elseif ($hasSensorValid && $hasTempC && $hasHumPct) {
+            // Payload firmware baru: ketiga field sensor wajib tersedia bersamaan
             if (!is_bool($data['sensor_valid'])) {
                 Log::warning("[NODE LINK METRICS] sensor_valid bukan boolean untuk room {$roomId}");
                 return false;
@@ -1303,8 +1325,8 @@ class MqttSubscribeCommand extends Command
                     Log::warning("[NODE LINK METRICS] sensor_valid=true mewajibkan telemetry_received=true untuk room {$roomId}");
                     return false;
                 }
-                $tc = $data['temperature_c'] ?? null;
-                $hp = $data['humidity_percent'] ?? null;
+                $tc = $data['temperature_c'];
+                $hp = $data['humidity_percent'];
 
                 $isTcValid = is_numeric($tc) && is_finite($tc) && $tc >= -40 && $tc <= 125;
                 $isHpValid = is_numeric($hp) && is_finite($hp) && $hp >= 0 && $hp <= 100;
@@ -1318,12 +1340,12 @@ class MqttSubscribeCommand extends Command
                 $tempC = round((float) $tc, 2);
                 $humPct = round((float) $hp, 2);
             } else {
-                // sensor_valid=false mewajibkan temperature_c dan humidity_percent null
-                if (isset($data['temperature_c']) && $data['temperature_c'] !== null) {
+                // sensor_valid=false mewajibkan keduanya benar-benar ada dan bernilai null
+                if ($data['temperature_c'] !== null) {
                     Log::warning("[NODE LINK METRICS] temperature_c harus null jika sensor_valid=false pada room {$roomId}");
                     return false;
                 }
-                if (isset($data['humidity_percent']) && $data['humidity_percent'] !== null) {
+                if ($data['humidity_percent'] !== null) {
                     Log::warning("[NODE LINK METRICS] humidity_percent harus null jika sensor_valid=false pada room {$roomId}");
                     return false;
                 }
@@ -1331,6 +1353,10 @@ class MqttSubscribeCommand extends Command
                 $tempC = null;
                 $humPct = null;
             }
+        } else {
+            // Payload parsial: salah satu field ada tapi field sensor lainnya tidak lengkap -> ditolak!
+            Log::warning("[NODE LINK METRICS] Payload sensor parsial ditolak untuk room {$roomId}");
+            return false;
         }
 
         // 8. Hitung ulang PDR di backend

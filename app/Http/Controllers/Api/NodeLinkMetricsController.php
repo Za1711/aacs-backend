@@ -50,8 +50,10 @@ class NodeLinkMetricsController extends Controller
         $room = $this->resolveRoom($roomId);
 
         $sessionIds = NodeLinkSample::where('room_id', $roomId)
-            ->distinct()
-            ->orderBy('session_id', 'desc')
+            ->selectRaw('session_id, MAX(received_at) as last_received_at')
+            ->groupBy('session_id')
+            ->orderByDesc('last_received_at')
+            ->orderByDesc('session_id')
             ->pluck('session_id');
 
         $sessions = [];

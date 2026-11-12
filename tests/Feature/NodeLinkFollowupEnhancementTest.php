@@ -862,4 +862,326 @@ class NodeLinkFollowupEnhancementTest extends TestCase
         $this->assertNull($sample->temperature_c);
         $this->assertNull($sample->humidity_percent);
     }
+
+    /**
+     * 21. Penentuan sesi terbaru memprioritaskan waktu sampel terakhir (received_at) daripada ID numerik.
+     * Session ID 9000 memiliki received_at lebih lama.
+     * Session ID 1000 memiliki received_at lebih baru.
+     * Sesi 1000 harus muncul dan terpilih pertama.
+     */
+    public function test_21_session_ordering_prioritizes_latest_received_at_over_session_id(): void
+    {
+        $olderTime = Carbon::now('UTC')->subHours(3);
+        $newerTime = Carbon::now('UTC')->subMinutes(5);
+
+        // Session 9000: Angka ID lebih besar, tetapi received_at lebih lama
+        NodeLinkSample::create([
+            'room_id'              => $this->room->id,
+            'session_id'           => 9000,
+            'telemetry_seq'        => 1,
+            'telemetry_packet_seq' => 1,
+            'sent_total'           => 1,
+            'acked_total'          => 1,
+            'failed_total'         => 0,
+            'retries_total'        => 0,
+            'pdr'                  => 100.0,
+            'telemetry_acked'      => true,
+            'telemetry_received'   => true,
+            'battery_valid'        => true,
+            'battery_mv'           => 3800,
+            'battery_percent'      => 80,
+            'rssi_dbm'             => -70,
+            'test_complete'        => false,
+            'received_at'          => $olderTime,
+        ]);
+
+        // Session 1000: Angka ID lebih kecil, tetapi received_at lebih baru
+        NodeLinkSample::create([
+            'room_id'              => $this->room->id,
+            'session_id'           => 1000,
+            'telemetry_seq'        => 1,
+            'telemetry_packet_seq' => 1,
+            'sent_total'           => 1,
+            'acked_total'          => 1,
+            'failed_total'         => 0,
+            'retries_total'        => 0,
+            'pdr'                  => 100.0,
+            'telemetry_acked'      => true,
+            'telemetry_received'   => true,
+            'battery_valid'        => true,
+            'battery_mv'           => 3800,
+            'battery_percent'      => 80,
+            'rssi_dbm'             => -65,
+            'test_complete'        => false,
+            'received_at'          => $newerTime,
+        ]);
+
+        // A. Endpoint API daftar sesi
+        $response = $this->actingAs($this->user, 'sanctum')->getJson("/api/v1/rooms/{$this->room->id}/node-link-sessions");
+        $response->assertStatus(200);
+        $sessions = $response->json('data');
+
+        $this->assertNotEmpty($sessions);
+        $this->assertEquals(1000, $sessions[0]['session_id'], 'Sesi 1000 harus berada pada urutan pertama di API');
+        $this->assertEquals(9000, $sessions[1]['session_id'], 'Sesi 9000 harus berada pada urutan kedua di API');
+
+        // B. Dashboard Web: $sessions dan dropdown otomatis memilih sesi terbaru berdasarkan waktu
+        $webResponse = $this->actingAs($this->user)->get("/dashboard?room_id={$this->room->id}");
+        $webResponse->assertStatus(200);
+
+        $viewSessions = $webResponse->viewData('sessions');
+        $this->assertNotEmpty($viewSessions);
+        $this->assertEquals(1000, $viewSessions[0]['session_id'], 'Sesi 1000 harus menjadi elemen pertama ($sessions[0]) di Dashboard');
+
+        // Pastikan HTML dropdown merender sesi 1000 sebagai selected dan tombol download prominent mengarah ke 1000
+        $webResponse->assertSee('<option value="1000" selected>', false);
+        $webResponse->assertSee("/node-link-sessions/1000/export.csv");
+    }
+
+    /**
+     * 22. Validasi ketat handleNodeTelemetry sesuai laporan.
+     */
+    public function test_22_handle_node_telemetry_hardened_validation(): void
+    {
+        $topic = "room/{$this->room->id}/node/telemetry";
+
+        // version tidak ada
+        $this->assertFalse($this->command->handleNodeTelemetry($topic, json_encode([
+            'source' => 'USER_NODE', 'valid' => true, 'suhu' => 24.5, 'kelembaban' => 60.0,
+        ])));
+
+        // version bukan integer
+        $this->assertFalse($this->command->handleNodeTelemetry($topic, json_encode([
+            'version' => "1", 'source' => 'USER_NODE', 'valid' => true, 'suhu' => 24.5, 'kelembaban' => 60.0,
+        ])));
+
+        // version bukan 1
+        $this->assertFalse($this->command->handleNodeTelemetry($topic, json_encode([
+            'version' => 2, 'source' => 'USER_NODE', 'valid' => true, 'suhu' => 24.5, 'kelembaban' => 60.0,
+        ])));
+
+        // source tidak ada
+        $this->assertFalse($this->command->handleNodeTelemetry($topic, json_encode([
+            'version' => 1, 'valid' => true, 'suhu' => 24.5, 'kelembaban' => 60.0,
+        ])));
+
+        // source bukan USER_NODE atau NODE
+        $this->assertFalse($this->command->handleNodeTelemetry($topic, json_encode([
+            'version' => 1, 'source' => 'REMOTE', 'valid' => true, 'suhu' => 24.5, 'kelembaban' => 60.0,
+        ])));
+
+        // valid bukan boolean
+        $this->assertFalse($this->command->handleNodeTelemetry($topic, json_encode([
+            'version' => 1, 'source' => 'USER_NODE', 'valid' => "true", 'suhu' => 24.5, 'kelembaban' => 60.0,
+        ])));
+
+        // valid=false tetapi key suhu hilang
+        $this->assertFalse($this->command->handleNodeTelemetry($topic, json_encode([
+            'version' => 1, 'source' => 'USER_NODE', 'valid' => false, 'kelembaban' => null,
+        ])));
+
+        // valid=false tetapi key kelembaban hilang
+        $this->assertFalse($this->command->handleNodeTelemetry($topic, json_encode([
+            'version' => 1, 'source' => 'USER_NODE', 'valid' => false, 'suhu' => null,
+        ])));
+
+        // valid=false tetapi nilai suhu tidak null
+        $this->assertFalse($this->command->handleNodeTelemetry($topic, json_encode([
+            'version' => 1, 'source' => 'USER_NODE', 'valid' => false, 'suhu' => 25.0, 'kelembaban' => null,
+        ])));
+
+        // valid=false tetapi nilai kelembaban tidak null
+        $this->assertFalse($this->command->handleNodeTelemetry($topic, json_encode([
+            'version' => 1, 'source' => 'USER_NODE', 'valid' => false, 'suhu' => null, 'kelembaban' => 55.0,
+        ])));
+
+        // valid=false dengan key suhu & kelembaban bernilai null secara eksplisit -> SUKSES
+        $this->assertTrue($this->command->handleNodeTelemetry($topic, json_encode([
+            'version' => 1, 'source' => 'USER_NODE', 'valid' => false, 'suhu' => null, 'kelembaban' => null,
+        ])));
+
+        // valid=true dengan alias source NODE -> SUKSES
+        $this->assertTrue($this->command->handleNodeTelemetry($topic, json_encode([
+            'version' => 1, 'source' => 'NODE', 'valid' => true, 'suhu' => 24.8, 'kelembaban' => 58.2,
+        ])));
+    }
+
+    /**
+     * 23. Validasi ketat handleRemoteTelemetry: valid=false mewajibkan suhu & kelembaban ada dan bernilai null.
+     */
+    public function test_23_handle_remote_telemetry_hardened_validation(): void
+    {
+        $topic = "room/{$this->room->id}/remote/telemetry";
+
+        // valid=false tetapi suhu tidak ada
+        $this->assertFalse($this->command->handleRemoteTelemetry($topic, json_encode([
+            'version' => 1, 'source' => 'REMOTE', 'valid' => false, 'kelembaban' => null,
+        ])));
+
+        // valid=false tetapi kelembaban tidak ada
+        $this->assertFalse($this->command->handleRemoteTelemetry($topic, json_encode([
+            'version' => 1, 'source' => 'REMOTE', 'valid' => false, 'suhu' => null,
+        ])));
+
+        // valid=false tetapi suhu berisi nilai numerik
+        $this->assertFalse($this->command->handleRemoteTelemetry($topic, json_encode([
+            'version' => 1, 'source' => 'REMOTE', 'valid' => false, 'suhu' => 24.5, 'kelembaban' => null,
+        ])));
+
+        // valid=false dengan suhu & kelembaban null eksplisit -> SUKSES
+        $this->assertTrue($this->command->handleRemoteTelemetry($topic, json_encode([
+            'version' => 1, 'source' => 'REMOTE', 'valid' => false, 'suhu' => null, 'kelembaban' => null,
+        ])));
+    }
+
+    /**
+     * 24. handleNodeLinkMetrics menolak payload sensor parsial dan membedakan legacy vs strict modern.
+     */
+    public function test_24_handle_node_link_metrics_partial_payload_rejection(): void
+    {
+        $topic = "room/{$this->room->id}/node/link-metrics";
+        $basePayload = [
+            'version'              => 1,
+            'session_id'           => 7701,
+            'telemetry_seq'        => 1,
+            'telemetry_packet_seq' => 1,
+            'sent_total'           => 1,
+            'acked_total'          => 1,
+            'failed_total'         => 0,
+            'retries_total'        => 0,
+            'pdr'                  => 100.0,
+            'telemetry_acked'      => true,
+            'telemetry_received'   => true,
+            'battery_valid'        => true,
+            'battery_mv'           => 3800,
+            'battery_percent'      => 75,
+            'rssi_dbm'             => -65,
+            'test_complete'        => false,
+        ];
+
+        // Parsial 1: sensor_valid ada, tapi temperature_c & humidity_percent tidak ada -> DITOLAK
+        $this->assertFalse($this->command->handleNodeLinkMetrics($topic, json_encode(array_merge($basePayload, [
+            'sensor_valid' => true,
+        ]))));
+
+        // Parsial 2: sensor_valid dan temperature_c ada, tapi humidity_percent tidak ada -> DITOLAK
+        $this->assertFalse($this->command->handleNodeLinkMetrics($topic, json_encode(array_merge($basePayload, [
+            'sensor_valid'  => true,
+            'temperature_c' => 24.5,
+        ]))));
+
+        // Parsial 3: temperature_c ada tapi sensor_valid tidak ada -> DITOLAK
+        $this->assertFalse($this->command->handleNodeLinkMetrics($topic, json_encode(array_merge($basePayload, [
+            'temperature_c'    => 24.5,
+            'humidity_percent' => 55.0,
+        ]))));
+
+        // Modern valid=false: ketiga key ada, temperature_c & humidity_percent null -> SUKSES
+        $this->assertTrue($this->command->handleNodeLinkMetrics($topic, json_encode(array_merge($basePayload, [
+            'telemetry_seq'    => 2,
+            'sensor_valid'     => false,
+            'temperature_c'    => null,
+            'humidity_percent' => null,
+        ]))));
+
+        // Modern valid=true: ketiga key ada dan valid -> SUKSES
+        $this->assertTrue($this->command->handleNodeLinkMetrics($topic, json_encode(array_merge($basePayload, [
+            'telemetry_seq'    => 3,
+            'sensor_valid'     => true,
+            'temperature_c'    => 25.2,
+            'humidity_percent' => 61.4,
+        ]))));
+    }
+
+    /**
+     * 25. Command node-link:delete-session menghapus sesi tertentu dengan aman dan membuat backup CSV.
+     */
+    public function test_25_delete_node_link_session_command_safely_removes_session_and_creates_backup(): void
+    {
+        // Setup data target sesi 8801 dan sesi pembanding 8802 pada room yang sama
+        for ($seq = 1; $seq <= 3; $seq++) {
+            NodeLinkSample::create([
+                'room_id'              => $this->room->id,
+                'session_id'           => 8801,
+                'telemetry_seq'        => $seq,
+                'telemetry_packet_seq' => $seq,
+                'sent_total'           => $seq,
+                'acked_total'          => $seq,
+                'failed_total'         => 0,
+                'retries_total'        => 0,
+                'pdr'                  => 100.0,
+                'telemetry_acked'      => true,
+                'telemetry_received'   => true,
+                'battery_valid'        => true,
+                'battery_mv'           => 3800,
+                'battery_percent'      => 80,
+                'rssi_dbm'             => -65,
+                'sensor_valid'         => true,
+                'temperature_c'        => 25.0,
+                'humidity_percent'     => 60.0,
+                'test_complete'        => false,
+                'received_at'          => now()->subMinutes(10),
+            ]);
+        }
+
+        for ($seq = 1; $seq <= 2; $seq++) {
+            NodeLinkSample::create([
+                'room_id'              => $this->room->id,
+                'session_id'           => 8802,
+                'telemetry_seq'        => $seq,
+                'telemetry_packet_seq' => $seq,
+                'sent_total'           => $seq,
+                'acked_total'          => $seq,
+                'failed_total'         => 0,
+                'retries_total'        => 0,
+                'pdr'                  => 100.0,
+                'telemetry_acked'      => true,
+                'telemetry_received'   => true,
+                'battery_valid'        => true,
+                'battery_mv'           => 3800,
+                'battery_percent'      => 80,
+                'rssi_dbm'             => -65,
+                'sensor_valid'         => false,
+                'temperature_c'        => null,
+                'humidity_percent'     => null,
+                'test_complete'        => false,
+                'received_at'          => now()->subMinutes(5),
+            ]);
+        }
+
+        $this->assertEquals(3, NodeLinkSample::where('room_id', $this->room->id)->where('session_id', 8801)->count());
+        $this->assertEquals(2, NodeLinkSample::where('room_id', $this->room->id)->where('session_id', 8802)->count());
+
+        // Jalankan artisan node-link:delete-session dengan flag --force
+        $exitCode = $this->artisan('node-link:delete-session', [
+            'roomId'    => (string) $this->room->id,
+            'sessionId' => '8801',
+            '--force'   => true,
+        ])->run();
+
+        $this->assertEquals(0, $exitCode);
+
+        // Verifikasi sesi 8801 terhapus bersih
+        $this->assertEquals(0, NodeLinkSample::where('room_id', $this->room->id)->where('session_id', 8801)->count());
+
+        // Verifikasi sesi 8802 tetap utuh tidak tersentuh
+        $this->assertEquals(2, NodeLinkSample::where('room_id', $this->room->id)->where('session_id', 8802)->count());
+
+        // Verifikasi file backup tersimpan di storage/app/backups
+        $backupFiles = glob(storage_path('app/backups/node_link_backup_room_' . $this->room->id . '_session_8801_*.csv'));
+        $this->assertNotEmpty($backupFiles, 'File backup CSV harus terbentuk di folder storage/app/backups');
+
+        // Cleanup file backup test
+        foreach ($backupFiles as $bf) {
+            @unlink($bf);
+        }
+
+        // Test room atau session tidak valid
+        $failCode = $this->artisan('node-link:delete-session', [
+            'roomId'    => '999999',
+            'sessionId' => '8801',
+            '--force'   => true,
+        ])->run();
+        $this->assertEquals(1, $failCode);
+    }
 }

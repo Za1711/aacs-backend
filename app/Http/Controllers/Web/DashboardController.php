@@ -37,8 +37,9 @@ class DashboardController extends Controller
         $sessions = [];
         if ($currentRoom) {
             $sessionIds = NodeLinkSample::where('room_id', $currentRoom->id)
-                ->select('session_id')
-                ->distinct()
+                ->selectRaw('session_id, MAX(received_at) as last_received_at')
+                ->groupBy('session_id')
+                ->orderByDesc('last_received_at')
                 ->orderByDesc('session_id')
                 ->pluck('session_id');
 

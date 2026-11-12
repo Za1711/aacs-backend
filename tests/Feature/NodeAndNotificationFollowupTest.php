@@ -741,6 +741,8 @@ class NodeAndNotificationFollowupTest extends TestCase
     {
         // 1. Telemetri
         $telemetryMsg = json_encode([
+            'version'    => 1,
+            'source'     => 'USER_NODE',
             'suhu'       => 27.8,
             'kelembaban' => 65.2,
             'valid'      => true,
