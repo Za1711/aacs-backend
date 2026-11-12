@@ -15,6 +15,8 @@ use App\Models\NodeBatteryStatus;
 use App\Models\NodeBatteryLog;
 use App\Models\NodeTelemetryStatus;
 use App\Models\NodeTelemetryLog;
+use App\Models\RemoteTelemetryStatus;
+use App\Models\RemoteTelemetryLog;
 use App\Models\NodeLinkSample;
 use App\Models\RemoteDeviceStatus;
 use App\Jobs\SendFcmNotificationJob;
@@ -51,6 +53,10 @@ class MqttSubscribeCommand extends Command
 
         $mqtt->subscribe('room/+/telemetry', function (string $topic, string $message) {
             $this->handleTelemetry($topic, $message);
+        });
+
+        $mqtt->subscribe('room/+/remote/telemetry', function (string $topic, string $message) {
+            $this->handleRemoteTelemetry($topic, $message);
         });
 
         $mqtt->subscribe('room/+/ac/status', function (string $topic, string $message) {
@@ -100,25 +106,133 @@ class MqttSubscribeCommand extends Command
         if (!$roomId || !Room::find($roomId)) return;
 
         $data = json_decode($message, true);
-        if ($data) {
-            SensorLog::create([
-                'room_id'     => $roomId,
-                'temperature' => $data['suhu'] ?? 0,
-                'humidity'    => $data['kelembaban'] ?? 0,
+        if (!$data || !is_array($data)) return;
+
+        // 1. Baca dan normalisasi source
+        if (isset($data['source'])) {
+            $rawSource = strtoupper(trim((string)$data['source']));
+            if ($rawSource === 'NODE' || $rawSource === 'USER_NODE') {
+                $source = 'USER_NODE';
+            } elseif ($rawSource === 'REMOTE') {
+                $source = 'REMOTE';
+            } else {
+                $source = 'UNKNOWN';
+            }
+        } else {
+            $source = 'UNKNOWN';
+        }
+
+        // 2. Validasi numeric dan finite untuk suhu & kelembaban
+        $suhu = $data['suhu'] ?? null;
+        $kelembaban = $data['kelembaban'] ?? null;
+        $payloadValid = isset($data['valid']) ? (bool)$data['valid'] : true;
+
+        $isSuhuValid = is_numeric($suhu) && is_finite($suhu) && $suhu >= -40 && $suhu <= 125;
+        $isHumValid = is_numeric($kelembaban) && is_finite($kelembaban) && $kelembaban >= 0 && $kelembaban <= 100;
+
+        $isValid = $payloadValid && $isSuhuValid && $isHumValid;
+        $temp = $isValid ? round((float) $suhu, 2) : null;
+        $hum  = $isValid ? round((float) $kelembaban, 2) : null;
+
+        SensorLog::create([
+            'room_id'     => $roomId,
+            'temperature' => $temp,
+            'humidity'    => $hum,
+            'source'      => $source,
+            'valid'       => $isValid,
+        ]);
+
+        Device::where('room_id', $roomId)
+            ->where('device_type', 'ESP32')
+            ->where('is_paired', true)
+            ->update([
+                'last_ping' => now(),
+                'status'    => 'ONLINE',
             ]);
 
-            Device::where('room_id', $roomId)
-                ->where('device_type', 'ESP32')
-                ->where('is_paired', true)
-                ->update([
-                    'last_ping' => now(),
-                    'status'    => 'ONLINE',
-                ]);
+        if ($this->output) {
+            $this->info("Saved telemetry for room $roomId: Temp " . ($temp ?? 'null') . " (Source: {$source})");
+        }
+    }
 
-            if ($this->output) {
-                $this->info("Saved telemetry for room $roomId: Temp " . ($data['suhu'] ?? 0));
+    public function handleRemoteTelemetry(string $topic, string $message): bool
+    {
+        $roomId = $this->extractRoomId($topic);
+        if (!$roomId) {
+            Log::warning("[REMOTE TELEMETRY] Gagal parse room_id dari topic: {$topic}");
+            return false;
+        }
+
+        $room = Room::find($roomId);
+        if (!$room) {
+            Log::warning("[REMOTE TELEMETRY] Room {$roomId} tidak ditemukan.");
+            return false;
+        }
+
+        $data = json_decode($message, true);
+        if (!is_array($data)) {
+            Log::warning("[REMOTE TELEMETRY] Payload bukan JSON valid untuk room {$roomId}");
+            return false;
+        }
+
+        if (($data['version'] ?? null) !== 1) {
+            Log::warning("[REMOTE TELEMETRY] Versi tidak didukung untuk room {$roomId}: " . ($data['version'] ?? 'null'));
+            return false;
+        }
+
+        if (strtoupper(trim((string)($data['source'] ?? ''))) !== 'REMOTE') {
+            Log::warning("[REMOTE TELEMETRY] Source bukan REMOTE untuk room {$roomId}: " . ($data['source'] ?? 'null'));
+            return false;
+        }
+
+        if (!isset($data['valid']) || !is_bool($data['valid'])) {
+            Log::warning("[REMOTE TELEMETRY] Field 'valid' bukan boolean untuk room {$roomId}");
+            return false;
+        }
+
+        $receivedAt = Carbon::now('UTC');
+        $isValid = false;
+        $temp = null;
+        $hum = null;
+
+        if ($data['valid'] === true) {
+            $suhu = $data['suhu'] ?? null;
+            $kelembaban = $data['kelembaban'] ?? null;
+
+            $isSuhuValid = is_numeric($suhu) && is_finite($suhu) && $suhu >= -40 && $suhu <= 125;
+            $isHumValid = is_numeric($kelembaban) && is_finite($kelembaban) && $kelembaban >= 0 && $kelembaban <= 100;
+
+            if ($isSuhuValid && $isHumValid) {
+                $isValid = true;
+                $temp = round((float) $suhu, 2);
+                $hum = round((float) $kelembaban, 2);
             }
         }
+
+        RemoteTelemetryStatus::updateOrCreate(
+            ['room_id' => $roomId],
+            [
+                'valid'       => $isValid,
+                'temperature' => $temp,
+                'humidity'    => $hum,
+                'received_at' => $receivedAt,
+            ]
+        );
+
+        RemoteTelemetryLog::create([
+            'room_id'     => $roomId,
+            'valid'       => $isValid,
+            'temperature' => $temp,
+            'humidity'    => $hum,
+            'received_at' => $receivedAt,
+            'created_at'  => $receivedAt,
+        ]);
+
+        if ($this->output) {
+            $this->info("Saved remote telemetry for room $roomId: Temp " . ($temp ?? 'null') . ", Hum " . ($hum ?? 'null') . ", Valid " . ($isValid ? 'true' : 'false'));
+        }
+
+        return true;
     }
 
     public function handleNodeBattery(string $topic, string $message): bool
@@ -258,35 +372,43 @@ class MqttSubscribeCommand extends Command
             return false;
         }
 
+        $receivedAt = Carbon::now('UTC');
+
+        $suhu = $data['suhu'] ?? null;
+        $kelembaban = $data['kelembaban'] ?? null;
+
         $isValid = ($data['valid'] ?? false) === true
-            && is_numeric($data['suhu'] ?? null)
-            && is_numeric($data['kelembaban'] ?? null);
+            && is_numeric($suhu) && is_finite($suhu) && $suhu >= -40 && $suhu <= 125
+            && is_numeric($kelembaban) && is_finite($kelembaban) && $kelembaban >= 0 && $kelembaban <= 100;
+
+        $temp = $isValid ? round((float) $suhu, 2) : null;
+        $hum  = $isValid ? round((float) $kelembaban, 2) : null;
 
         NodeTelemetryStatus::updateOrCreate(
             ['room_id' => $roomId],
             [
                 'valid'       => $isValid,
-                'temperature' => $isValid ? (float) $data['suhu'] : null,
-                'humidity'    => $isValid ? (float) $data['kelembaban'] : null,
-                'received_at' => Carbon::now('UTC'),
+                'temperature' => $temp,
+                'humidity'    => $hum,
+                'received_at' => $receivedAt,
             ]
         );
 
-        if ($isValid) {
-            NodeTelemetryLog::create([
-                'room_id'     => $roomId,
-                'temperature' => (float) $data['suhu'],
-                'humidity'    => (float) $data['kelembaban'],
-                'valid'       => true,
-                'created_at'  => Carbon::now('UTC'),
-            ]);
-        }
+        // Setiap payload dicatat ke node_telemetry_logs (baik valid maupun invalid)
+        NodeTelemetryLog::create([
+            'room_id'     => $roomId,
+            'temperature' => $temp,
+            'humidity'    => $hum,
+            'valid'       => $isValid,
+            'received_at' => $receivedAt,
+            'created_at'  => $receivedAt,
+        ]);
 
         if ($this->output) {
-            $statusStr = $isValid ? "Valid ({$data['suhu']}C, {$data['kelembaban']}%)" : "Invalid/Stale (null)";
+            $statusStr = $isValid ? "Valid ({$temp}C, {$hum}%)" : "Invalid/Null";
             $this->info("Saved node telemetry for room {$roomId}: {$statusStr}");
         }
-        Log::info("[NODE TELEMETRY] Saved node telemetry for room {$roomId}: " . ($isValid ? "Temp {$data['suhu']}" : "Invalid/Null"));
+        Log::info("[NODE TELEMETRY] Saved node telemetry for room {$roomId}: " . ($isValid ? "Temp {$temp}" : "Invalid/Null"));
 
         return true;
     }
@@ -1093,6 +1215,25 @@ class MqttSubscribeCommand extends Command
             $rssiDbm = null;
         }
 
+        // 7.1 Validasi sensor link metrics (backward-compatible)
+        $sensorValid = false;
+        $tempC = null;
+        $humPct = null;
+
+        if (isset($data['sensor_valid']) && is_bool($data['sensor_valid']) && $data['sensor_valid'] === true) {
+            $telemetryReceived = (bool)($data['telemetry_received'] ?? false);
+            $tc = $data['temperature_c'] ?? null;
+            $hp = $data['humidity_percent'] ?? null;
+
+            if ($telemetryReceived
+                && is_numeric($tc) && is_finite($tc) && $tc >= -40 && $tc <= 125
+                && is_numeric($hp) && is_finite($hp) && $hp >= 0 && $hp <= 100) {
+                $sensorValid = true;
+                $tempC = round((float) $tc, 2);
+                $humPct = round((float) $hp, 2);
+            }
+        }
+
         // 8. Hitung ulang PDR di backend
         $pdr = round(100.0 * ($data['acked_total'] / $data['sent_total']), 3);
 
@@ -1112,6 +1253,9 @@ class MqttSubscribeCommand extends Command
                 'pdr'                  => $pdr,
                 'telemetry_acked'      => (bool) $data['telemetry_acked'],
                 'telemetry_received'   => (bool) $data['telemetry_received'],
+                'sensor_valid'         => $sensorValid,
+                'temperature_c'        => $tempC,
+                'humidity_percent'     => $humPct,
                 'battery_valid'        => (bool) $data['battery_valid'],
                 'battery_mv'           => $batteryMv,
                 'battery_percent'      => $batteryPercent,

@@ -46,6 +46,9 @@ Route::prefix('v1')->group(function () {
     Route::prefix('rooms/{roomId}')->group(function () {
         Route::get('/export-csv', [TelemetryController::class, 'exportCsv']);
         Route::get('/battery/export-csv', [TelemetryController::class, 'exportBatteryCsv']);
+        Route::get('/remote-telemetry/export.csv', [TelemetryController::class, 'exportRemoteTelemetryCsv']);
+        Route::get('/node-telemetry/export.csv', [TelemetryController::class, 'exportNodeTelemetryCsv']);
+        Route::get('/sensor-sources/export.csv', [TelemetryController::class, 'exportSensorSourcesCsv']);
         Route::get('/node-link-sessions/{sessionId}/export.csv', [NodeLinkMetricsController::class, 'exportCsv']);
         Route::post('/sensors', [TelemetryController::class, 'storeSensorLog']);
         Route::post('/occupancy', [TelemetryController::class, 'storeOccupancyLog']);

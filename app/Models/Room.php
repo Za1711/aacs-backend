@@ -73,6 +73,16 @@ class Room extends Model
         return $this->hasOne(RemoteDeviceStatus::class, 'room_id');
     }
 
+    public function remoteTelemetryStatus(): HasOne
+    {
+        return $this->hasOne(RemoteTelemetryStatus::class, 'room_id');
+    }
+
+    public function remoteTelemetryLogs(): HasMany
+    {
+        return $this->hasMany(RemoteTelemetryLog::class, 'room_id');
+    }
+
     /**
      * Get the formatted node battery status with freshness check.
      *

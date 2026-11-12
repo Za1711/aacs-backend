@@ -9,11 +9,15 @@ use App\Models\AcLog;
 use App\Models\NodeLinkSample;
 use App\Models\ControlLog;
 use App\Models\NodeBatteryLog;
+use App\Models\NodeTelemetryLog;
 use App\Models\RemoteDeviceStatus;
+use App\Models\RemoteTelemetryLog;
+use App\Models\RemoteTelemetryStatus;
 use App\Models\Room;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class TelemetryController extends Controller
@@ -34,6 +38,7 @@ class TelemetryController extends Controller
             'humidity'    => null,
             'updated_at'  => null,
             'is_stale'    => true,
+            'source'      => 'UNKNOWN',
         ];
 
         $telemetryRecent = false;
@@ -43,10 +48,11 @@ class TelemetryController extends Controller
             $isStale = ($ageSeconds >= 20);
 
             $sensorData = [
-                'temperature' => (float) $sensor->temperature,
-                'humidity'    => (float) $sensor->humidity,
+                'temperature' => $sensor->temperature !== null ? (float) $sensor->temperature : null,
+                'humidity'    => $sensor->humidity !== null ? (float) $sensor->humidity : null,
                 'updated_at'  => $sensorCreatedAt->toIso8601ZuluString(),
                 'is_stale'    => $isStale,
+                'source'      => $sensor->source ?? 'UNKNOWN',
             ];
 
             if (!$isStale) {
@@ -80,6 +86,21 @@ class TelemetryController extends Controller
 
         $battery = $room->getNodeBatteryStatus();
 
+        // Remote sensor telemetry (stale timeout 20 detik)
+        $remoteTelemetry = $room->remoteTelemetryStatus;
+        $isRemoteStale = !$remoteTelemetry
+            || !$remoteTelemetry->valid
+            || is_null($remoteTelemetry->received_at)
+            || Carbon::parse($remoteTelemetry->received_at)->utc()->lt($now->copy()->subSeconds(20));
+
+        $remoteSensorData = [
+            'temperature' => ($remoteTelemetry && $remoteTelemetry->temperature !== null) ? (float) $remoteTelemetry->temperature : null,
+            'humidity'    => ($remoteTelemetry && $remoteTelemetry->humidity !== null) ? (float) $remoteTelemetry->humidity : null,
+            'updated_at'  => $remoteTelemetry?->received_at ? Carbon::parse($remoteTelemetry->received_at)->utc()->toIso8601ZuluString() : null,
+            'is_stale'    => $isRemoteStale,
+            'valid'       => $remoteTelemetry ? (bool) $remoteTelemetry->valid : false,
+        ];
+
         // Node sensor telemetry (stale timeout 60 detik)
         $nodeStatus = $room->nodeTelemetryStatus;
         $isNodeStale = !$nodeStatus
@@ -100,6 +121,9 @@ class TelemetryController extends Controller
         $controlSource   = ($rawControlSource === 'NODE' || $rawControlSource === 'USER_NODE') ? 'USER_NODE' : 'REMOTE';
         $nodePaired      = $acStatus ? (bool) $acStatus->node_paired : false;
         $nodeConnected   = $acStatus ? (bool) $acStatus->node_connected : false;
+
+        $activeSensorData = $sensorData;
+        $activeSource = ($sensor && $sensor->source && $sensor->source !== 'UNKNOWN') ? $sensor->source : $controlSource;
 
         // node_battery_low = true hanya jika node connected, battery valid, fresh (tidak stale), dan millivolts <= 3300
         $isBatteryFreshAndValid = ($battery['valid'] === true) && ($battery['is_stale'] === false);
@@ -192,6 +216,9 @@ class TelemetryController extends Controller
         return response()->json([
             'data' => [
                 'sensor'              => $sensorData,
+                'active_sensor'       => $activeSensorData,
+                'active_source'       => $activeSource,
+                'remote_sensor'       => $remoteSensorData,
                 'node_sensor'         => $nodeSensorData,
                 'occupancy'           => $occupancyData,
                 'ac_status'           => $acStatus,
@@ -464,4 +491,310 @@ class TelemetryController extends Controller
         }, 200, $headers);
     }
 
+    /**
+     * Export independent Remote telemetry logs to CSV.
+     * Endpoint: GET /api/v1/rooms/{roomId}/remote-telemetry/export.csv
+     */
+    public function exportRemoteTelemetryCsv(Request $request, int $roomId): StreamedResponse
+    {
+        $user = auth('sanctum')->user();
+        if ($user) {
+            $room = Room::where('user_id', $user->id)->findOrFail($roomId);
+        } else {
+            $room = Room::findOrFail($roomId);
+        }
+
+        $dateParam = $request->query('date');
+        $daysParam = $request->query('days');
+        $todayWib = Carbon::today('Asia/Jakarta');
+
+        $query = RemoteTelemetryLog::where('room_id', $roomId);
+
+        if ($dateParam === 'today') {
+            $start = $todayWib->copy()->setTimezone('UTC');
+            $query->where('received_at', '>=', $start);
+        } elseif (!empty($dateParam)) {
+            $start = Carbon::parse($dateParam, 'Asia/Jakarta')->startOfDay()->setTimezone('UTC');
+            $end = Carbon::parse($dateParam, 'Asia/Jakarta')->endOfDay()->setTimezone('UTC');
+            $query->whereBetween('received_at', [$start, $end]);
+        } elseif (!empty($daysParam)) {
+            $start = Carbon::now('UTC')->subDays((int) $daysParam);
+            $query->where('received_at', '>=', $start);
+        }
+
+        $query->orderBy('received_at', 'asc')->orderBy('id', 'asc');
+
+        $dateSuffix = date('Y-m-d');
+        $fileName = "remote_telemetry_room_{$roomId}_{$dateSuffix}.csv";
+        $headers = [
+            'Content-Type'        => 'text/csv; charset=UTF-8',
+            'Content-Disposition' => "attachment; filename=\"{$fileName}\"",
+            'Pragma'              => 'no-cache',
+            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
+            'Expires'             => '0',
+        ];
+
+        return response()->stream(function () use ($query) {
+            $file = fopen('php://output', 'w');
+            fputs($file, "\xEF\xBB\xBF");
+
+            fputcsv($file, [
+                'ID',
+                'Room_ID',
+                'Source',
+                'Valid',
+                'Timestamp_UTC',
+                'Timestamp_WIB',
+                'Temperature_C',
+                'Humidity_Percent',
+            ]);
+
+            $query->chunk(500, function ($logs) use ($file) {
+                foreach ($logs as $log) {
+                    $utcTs = Carbon::parse($log->received_at)->utc()->toIso8601ZuluString();
+                    $wibTs = Carbon::parse($log->received_at)->timezone('Asia/Jakarta')->format('Y-m-d H:i:s');
+                    $temp = $log->temperature !== null ? number_format((float) $log->temperature, 2, '.', '') : '';
+                    $rh = $log->humidity !== null ? number_format((float) $log->humidity, 2, '.', '') : '';
+
+                    fputcsv($file, [
+                        $log->id,
+                        $log->room_id,
+                        'REMOTE',
+                        $log->valid ? 'TRUE' : 'FALSE',
+                        $utcTs,
+                        $wibTs,
+                        $temp,
+                        $rh,
+                    ]);
+                }
+            });
+
+            fclose($file);
+        }, 200, $headers);
+    }
+
+    /**
+     * Export independent Node telemetry logs to CSV.
+     * Endpoint: GET /api/v1/rooms/{roomId}/node-telemetry/export.csv
+     */
+    public function exportNodeTelemetryCsv(Request $request, int $roomId): StreamedResponse
+    {
+        $user = auth('sanctum')->user();
+        if ($user) {
+            $room = Room::where('user_id', $user->id)->findOrFail($roomId);
+        } else {
+            $room = Room::findOrFail($roomId);
+        }
+
+        $dateParam = $request->query('date');
+        $daysParam = $request->query('days');
+        $todayWib = Carbon::today('Asia/Jakarta');
+
+        $query = NodeTelemetryLog::where('room_id', $roomId);
+
+        if ($dateParam === 'today') {
+            $start = $todayWib->copy()->setTimezone('UTC');
+            $query->where(function ($q) use ($start) {
+                $q->where('received_at', '>=', $start)
+                  ->orWhere(function ($q2) use ($start) {
+                      $q2->whereNull('received_at')->where('created_at', '>=', $start);
+                  });
+            });
+        } elseif (!empty($dateParam)) {
+            $start = Carbon::parse($dateParam, 'Asia/Jakarta')->startOfDay()->setTimezone('UTC');
+            $end = Carbon::parse($dateParam, 'Asia/Jakarta')->endOfDay()->setTimezone('UTC');
+            $query->where(function ($q) use ($start, $end) {
+                $q->whereBetween('received_at', [$start, $end])
+                  ->orWhere(function ($q2) use ($start, $end) {
+                      $q2->whereNull('received_at')->whereBetween('created_at', [$start, $end]);
+                  });
+            });
+        } elseif (!empty($daysParam)) {
+            $start = Carbon::now('UTC')->subDays((int) $daysParam);
+            $query->where(function ($q) use ($start) {
+                $q->where('received_at', '>=', $start)
+                  ->orWhere(function ($q2) use ($start) {
+                      $q2->whereNull('received_at')->where('created_at', '>=', $start);
+                  });
+            });
+        }
+
+        $query->orderBy(DB::raw('COALESCE(received_at, created_at)'), 'asc')->orderBy('id', 'asc');
+
+        $dateSuffix = date('Y-m-d');
+        $fileName = "node_telemetry_room_{$roomId}_{$dateSuffix}.csv";
+        $headers = [
+            'Content-Type'        => 'text/csv; charset=UTF-8',
+            'Content-Disposition' => "attachment; filename=\"{$fileName}\"",
+            'Pragma'              => 'no-cache',
+            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
+            'Expires'             => '0',
+        ];
+
+        return response()->stream(function () use ($query) {
+            $file = fopen('php://output', 'w');
+            fputs($file, "\xEF\xBB\xBF");
+
+            fputcsv($file, [
+                'ID',
+                'Room_ID',
+                'Source',
+                'Valid',
+                'Timestamp_UTC',
+                'Timestamp_WIB',
+                'Temperature_C',
+                'Humidity_Percent',
+            ]);
+
+            $query->chunk(500, function ($logs) use ($file) {
+                foreach ($logs as $log) {
+                    $ts = $log->received_at ?? $log->created_at;
+                    $utcTs = Carbon::parse($ts)->utc()->toIso8601ZuluString();
+                    $wibTs = Carbon::parse($ts)->timezone('Asia/Jakarta')->format('Y-m-d H:i:s');
+                    $temp = $log->temperature !== null ? number_format((float) $log->temperature, 2, '.', '') : '';
+                    $rh = $log->humidity !== null ? number_format((float) $log->humidity, 2, '.', '') : '';
+
+                    fputcsv($file, [
+                        $log->id,
+                        $log->room_id,
+                        'USER_NODE',
+                        $log->valid ? 'TRUE' : 'FALSE',
+                        $utcTs,
+                        $wibTs,
+                        $temp,
+                        $rh,
+                    ]);
+                }
+            });
+
+            fclose($file);
+        }, 200, $headers);
+    }
+
+    /**
+     * Export combined sensor sources (Remote & Node) in long format to CSV.
+     * Endpoint: GET /api/v1/rooms/{roomId}/sensor-sources/export.csv
+     */
+    public function exportSensorSourcesCsv(Request $request, int $roomId): StreamedResponse
+    {
+        $user = auth('sanctum')->user();
+        if ($user) {
+            $room = Room::where('user_id', $user->id)->findOrFail($roomId);
+        } else {
+            $room = Room::findOrFail($roomId);
+        }
+
+        $dateParam = $request->query('date');
+        $daysParam = $request->query('days');
+        $todayWib = Carbon::today('Asia/Jakarta');
+
+        $remoteQuery = DB::table('remote_telemetry_logs')
+            ->select([
+                'id',
+                'room_id',
+                DB::raw("'REMOTE' as source"),
+                'valid',
+                'temperature',
+                'humidity',
+                'received_at as ts'
+            ])
+            ->where('room_id', $roomId);
+
+        $nodeQuery = DB::table('node_telemetry_logs')
+            ->select([
+                'id',
+                'room_id',
+                DB::raw("'USER_NODE' as source"),
+                'valid',
+                'temperature',
+                'humidity',
+                DB::raw('COALESCE(received_at, created_at) as ts')
+            ])
+            ->where('room_id', $roomId);
+
+        if ($dateParam === 'today') {
+            $start = $todayWib->copy()->setTimezone('UTC');
+            $remoteQuery->where('received_at', '>=', $start);
+            $nodeQuery->where(function ($q) use ($start) {
+                $q->where('received_at', '>=', $start)
+                  ->orWhere(function ($q2) use ($start) {
+                      $q2->whereNull('received_at')->where('created_at', '>=', $start);
+                  });
+            });
+        } elseif (!empty($dateParam)) {
+            $start = Carbon::parse($dateParam, 'Asia/Jakarta')->startOfDay()->setTimezone('UTC');
+            $end = Carbon::parse($dateParam, 'Asia/Jakarta')->endOfDay()->setTimezone('UTC');
+            $remoteQuery->whereBetween('received_at', [$start, $end]);
+            $nodeQuery->where(function ($q) use ($start, $end) {
+                $q->whereBetween('received_at', [$start, $end])
+                  ->orWhere(function ($q2) use ($start, $end) {
+                      $q2->whereNull('received_at')->whereBetween('created_at', [$start, $end]);
+                  });
+            });
+        } elseif (!empty($daysParam)) {
+            $start = Carbon::now('UTC')->subDays((int) $daysParam);
+            $remoteQuery->where('received_at', '>=', $start);
+            $nodeQuery->where(function ($q) use ($start) {
+                $q->where('received_at', '>=', $start)
+                  ->orWhere(function ($q2) use ($start) {
+                      $q2->whereNull('received_at')->where('created_at', '>=', $start);
+                  });
+            });
+        }
+
+        $unionQuery = $remoteQuery->unionAll($nodeQuery);
+        $combined = DB::query()->fromSub($unionQuery, 'combined_telemetry')
+            ->orderBy('ts', 'asc')
+            ->orderBy('id', 'asc');
+
+        $dateSuffix = date('Y-m-d');
+        $fileName = "sensor_sources_room_{$roomId}_{$dateSuffix}.csv";
+        $headers = [
+            'Content-Type'        => 'text/csv; charset=UTF-8',
+            'Content-Disposition' => "attachment; filename=\"{$fileName}\"",
+            'Pragma'              => 'no-cache',
+            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
+            'Expires'             => '0',
+        ];
+
+        return response()->stream(function () use ($combined) {
+            $file = fopen('php://output', 'w');
+            fputs($file, "\xEF\xBB\xBF");
+
+            fputcsv($file, [
+                'Record_Type',
+                'ID',
+                'Room_ID',
+                'Source',
+                'Valid',
+                'Timestamp_UTC',
+                'Timestamp_WIB',
+                'Temperature_C',
+                'Humidity_Percent',
+            ]);
+
+            $combined->chunk(500, function ($rows) use ($file) {
+                foreach ($rows as $row) {
+                    $utcTs = Carbon::parse($row->ts)->utc()->toIso8601ZuluString();
+                    $wibTs = Carbon::parse($row->ts)->timezone('Asia/Jakarta')->format('Y-m-d H:i:s');
+                    $temp = $row->temperature !== null ? number_format((float) $row->temperature, 2, '.', '') : '';
+                    $rh = $row->humidity !== null ? number_format((float) $row->humidity, 2, '.', '') : '';
+
+                    fputcsv($file, [
+                        'SAMPLE',
+                        $row->id,
+                        $row->room_id,
+                        $row->source,
+                        $row->valid ? 'TRUE' : 'FALSE',
+                        $utcTs,
+                        $wibTs,
+                        $temp,
+                        $rh,
+                    ]);
+                }
+            });
+
+            fclose($file);
+        }, 200, $headers);
+    }
 }

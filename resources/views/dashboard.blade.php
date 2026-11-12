@@ -282,13 +282,144 @@
             </div>
         </div>
 
-        <!-- Section 2: Data Riset Link Metrics ESP-NOW -->
+        <!-- Section: Ekspor Telemetri Sensor Independen (Remote & Node) -->
+        <div class="mt-12">
+            <div class="flex items-center justify-between mb-4">
+                <div>
+                    <h2 class="text-lg font-bold text-white flex items-center space-x-2">
+                        <span class="w-2.5 h-2.5 rounded-full bg-cyan-500"></span>
+                        <span>2. Ekspor Telemetri Sensor Independen (Remote & Node)</span>
+                    </h2>
+                    <p class="text-xs text-slate-400 mt-0.5">
+                        Log mentah pembacaan sensor SHT31 dari Remote dan Node secara terpisah serta perbandingan kedua sumber (retensi 30 hari).
+                    </p>
+                </div>
+                <span class="text-xs text-slate-400 hidden sm:block">Retensi: 30 Hari (RFC 4180 CSV, BOM UTF-8)</span>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+
+                <!-- CARD: TELEMETRI REMOTE -->
+                <div class="bg-slate-800/40 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between hover:border-slate-700 transition">
+                    <div>
+                        <div class="w-12 h-12 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 flex items-center justify-center text-2xl mb-4">
+                            📡
+                        </div>
+                        <h3 class="text-base font-bold text-white mb-1">Telemetri Remote</h3>
+                        <p class="text-xs text-slate-400 leading-relaxed mb-4">
+                            Riwayat suhu dan kelembapan SHT31 pada Remote, tetap direkam ketika Node aktif.
+                        </p>
+
+                        <div class="space-y-3 mb-6">
+                            <label class="text-xs font-semibold text-slate-300 block">Rentang Waktu:</label>
+                            <select id="remoteRange" onchange="toggleDateInput('remote')" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-medium text-slate-200">
+                                <option value="today">Hari Ini Saja (Default)</option>
+                                <option value="days_3">3 Hari Terakhir</option>
+                                <option value="days_7">7 Hari Terakhir</option>
+                                <option value="days_30">30 Hari Terakhir (Semua Data Tersedia)</option>
+                                <option value="custom">Pilih Tanggal Tertentu</option>
+                            </select>
+                            <div id="remoteDateContainer" class="hidden space-y-1">
+                                <input type="date" id="remoteDate" value="{{ date('Y-m-d') }}" min="{{ date('Y-m-d', strtotime('-30 days')) }}" max="{{ date('Y-m-d') }}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200">
+                                <div class="text-[10px] text-slate-400">Tersedia: {{ date('d M', strtotime('-30 days')) }} s/d Hari Ini</div>
+                            </div>
+                            <div class="text-[11px] text-cyan-400/90 pt-1 flex items-center space-x-1">
+                                <span>ℹ️</span>
+                                <span>Retensi database: 30 hari</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button onclick="downloadIndependentCsv('remote')" class="w-full py-2.5 px-4 rounded-xl bg-cyan-600 hover:bg-cyan-500 active:bg-cyan-700 text-white font-semibold text-xs transition flex items-center justify-center space-x-2 shadow-lg shadow-cyan-600/20">
+                        <span>📥</span>
+                        <span>Unduh CSV Remote</span>
+                    </button>
+                </div>
+
+                <!-- CARD: TELEMETRI NODE -->
+                <div class="bg-slate-800/40 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between hover:border-slate-700 transition">
+                    <div>
+                        <div class="w-12 h-12 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center text-2xl mb-4">
+                            🌱
+                        </div>
+                        <h3 class="text-base font-bold text-white mb-1">Telemetri Node</h3>
+                        <p class="text-xs text-slate-400 leading-relaxed mb-4">
+                            Riwayat suhu dan kelembapan SHT31 Node.
+                        </p>
+
+                        <div class="space-y-3 mb-6">
+                            <label class="text-xs font-semibold text-slate-300 block">Rentang Waktu:</label>
+                            <select id="nodeRange" onchange="toggleDateInput('node')" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-medium text-slate-200">
+                                <option value="today">Hari Ini Saja (Default)</option>
+                                <option value="days_3">3 Hari Terakhir</option>
+                                <option value="days_7">7 Hari Terakhir</option>
+                                <option value="days_30">30 Hari Terakhir (Semua Data Tersedia)</option>
+                                <option value="custom">Pilih Tanggal Tertentu</option>
+                            </select>
+                            <div id="nodeDateContainer" class="hidden space-y-1">
+                                <input type="date" id="nodeDate" value="{{ date('Y-m-d') }}" min="{{ date('Y-m-d', strtotime('-30 days')) }}" max="{{ date('Y-m-d') }}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200">
+                                <div class="text-[10px] text-slate-400">Tersedia: {{ date('d M', strtotime('-30 days')) }} s/d Hari Ini</div>
+                            </div>
+                            <div class="text-[11px] text-emerald-400/90 pt-1 flex items-center space-x-1">
+                                <span>ℹ️</span>
+                                <span>Retensi database: 30 hari</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button onclick="downloadIndependentCsv('node')" class="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-semibold text-xs transition flex items-center justify-center space-x-2 shadow-lg shadow-emerald-600/20">
+                        <span>📥</span>
+                        <span>Unduh CSV Node</span>
+                    </button>
+                </div>
+
+                <!-- CARD: PERBANDINGAN REMOTE & NODE -->
+                <div class="bg-slate-800/40 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between hover:border-slate-700 transition">
+                    <div>
+                        <div class="w-12 h-12 rounded-xl bg-violet-500/10 text-violet-400 border border-violet-500/20 flex items-center justify-center text-2xl mb-4">
+                            ⚖️
+                        </div>
+                        <h3 class="text-base font-bold text-white mb-1">Perbandingan Remote & Node</h3>
+                        <p class="text-xs text-slate-400 leading-relaxed mb-4">
+                            Data mentah kedua sensor dalam format long untuk analisis.
+                        </p>
+
+                        <div class="space-y-3 mb-6">
+                            <label class="text-xs font-semibold text-slate-300 block">Rentang Waktu:</label>
+                            <select id="compareRange" onchange="toggleDateInput('compare')" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-medium text-slate-200">
+                                <option value="today">Hari Ini Saja (Default)</option>
+                                <option value="days_3">3 Hari Terakhir</option>
+                                <option value="days_7">7 Hari Terakhir</option>
+                                <option value="days_30">30 Hari Terakhir (Semua Data Tersedia)</option>
+                                <option value="custom">Pilih Tanggal Tertentu</option>
+                            </select>
+                            <div id="compareDateContainer" class="hidden space-y-1">
+                                <input type="date" id="compareDate" value="{{ date('Y-m-d') }}" min="{{ date('Y-m-d', strtotime('-30 days')) }}" max="{{ date('Y-m-d') }}" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200">
+                                <div class="text-[10px] text-slate-400">Tersedia: {{ date('d M', strtotime('-30 days')) }} s/d Hari Ini</div>
+                            </div>
+                            <div class="text-[11px] text-violet-400/90 pt-1 flex items-center space-x-1">
+                                <span>ℹ️</span>
+                                <span>Format long terurut waktu (received_at ASC)</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button onclick="downloadIndependentCsv('compare')" class="w-full py-2.5 px-4 rounded-xl bg-violet-600 hover:bg-violet-500 active:bg-violet-700 text-white font-semibold text-xs transition flex items-center justify-center space-x-2 shadow-lg shadow-violet-600/20">
+                        <span>📥</span>
+                        <span>Unduh CSV Perbandingan</span>
+                    </button>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Section 3: Data Riset Link Metrics ESP-NOW -->
         <div class="mt-12">
             <div class="flex items-center justify-between mb-4">
                 <div>
                     <h2 class="text-lg font-bold text-white flex items-center space-x-2">
                         <span class="w-2.5 h-2.5 rounded-full bg-purple-500"></span>
-                        <span>2. Ekspor Data Riset: Link Metrics ESP-NOW (PDR, RSSI & Baterai)</span>
+                        <span>Telemetri Node & Link Metrics ESP-NOW</span>
                     </h2>
                     <p class="text-xs text-slate-400 mt-0.5">
                         Data evaluasi transmisi ESP-NOW Node ke Remote. PDR dihitung ulang oleh backend dari counter kumulatif.
@@ -342,7 +473,7 @@
                                    download="node_link_metrics_room_{{ $currentRoom->id }}_session_{{ $s['session_id'] }}.csv"
                                    class="inline-flex items-center justify-center space-x-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-500 active:bg-purple-700 text-white text-xs font-semibold rounded-xl shadow-lg shadow-purple-600/20 transition">
                                     <span>📥</span>
-                                    <span>Unduh CSV Sesi ({{ $s['session_id'] }})</span>
+                                    <span>Unduh CSV Lengkap Sesi {{ $s['session_id'] }}</span>
                                 </a>
                             </div>
                         </div>
@@ -450,6 +581,39 @@ print("RSSI valid terbaru (dBm):", summary["RSSI_Latest_dBm"])</code></pre>
         function downloadBatteryCsv() {
             const days = document.getElementById('batteryDays').value;
             const url = `/api/v1/rooms/${roomId}/battery/export-csv?days=${days}`;
+            window.location.href = url;
+        }
+
+        function downloadIndependentCsv(target) {
+            const range = document.getElementById(target + 'Range').value;
+            let endpoint = '';
+            if (target === 'remote') {
+                endpoint = `/api/v1/rooms/${roomId}/remote-telemetry/export.csv`;
+            } else if (target === 'node') {
+                endpoint = `/api/v1/rooms/${roomId}/node-telemetry/export.csv`;
+            } else if (target === 'compare') {
+                endpoint = `/api/v1/rooms/${roomId}/sensor-sources/export.csv`;
+            }
+
+            let params = [];
+            if (range === 'today') {
+                params.push('date=today');
+            } else if (range === 'days_3') {
+                params.push('days=3');
+            } else if (range === 'days_7') {
+                params.push('days=7');
+            } else if (range === 'days_30') {
+                params.push('days=30');
+            } else if (range === 'custom') {
+                const dateVal = document.getElementById(target + 'Date').value;
+                if (!dateVal) {
+                    alert('Silakan pilih tanggal terlebih dahulu.');
+                    return;
+                }
+                params.push(`date=${dateVal}`);
+            }
+
+            const url = endpoint + (params.length ? '?' + params.join('&') : '');
             window.location.href = url;
         }
     </script>

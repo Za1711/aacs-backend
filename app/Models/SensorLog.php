@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\MassPrunable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-#[Fillable(['room_id', 'temperature', 'humidity', 'created_at'])]
+#[Fillable(['room_id', 'temperature', 'humidity', 'source', 'valid', 'created_at'])]
 class SensorLog extends Model
 {
     use HasFactory, MassPrunable;
@@ -28,7 +28,8 @@ class SensorLog extends Model
     {
         return [
             'temperature' => 'float',
-            'humidity' => 'float',
+            'humidity'    => 'float',
+            'valid'       => 'boolean',
         ];
     }
 

@@ -214,6 +214,7 @@ class RoomController extends Controller
 
             // Reset node battery & telemetry transient status
             \App\Models\RemoteDeviceStatus::where('room_id', $id)->delete();
+            \App\Models\RemoteTelemetryStatus::where('room_id', $id)->delete();
             \App\Models\NodeBatteryStatus::where('room_id', $id)->delete();
             \App\Models\NodeTelemetryStatus::where('room_id', $id)->delete();
             \Illuminate\Support\Facades\Cache::forget("pairing_candidates_room_{$id}");

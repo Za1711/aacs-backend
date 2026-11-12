@@ -127,6 +127,9 @@ class NodeLinkMetricsController extends Controller
                 'telemetry_packet_seq' => (int) $s->telemetry_packet_seq,
                 'delivery_success'     => (bool) $s->telemetry_acked,
                 'telemetry_received'   => (bool) $s->telemetry_received,
+                'sensor_valid'         => (bool) $s->sensor_valid,
+                'temperature_c'        => ($s->sensor_valid && $s->temperature_c !== null) ? (float) $s->temperature_c : null,
+                'humidity_percent'     => ($s->sensor_valid && $s->humidity_percent !== null) ? (float) $s->humidity_percent : null,
                 'rssi_dbm'             => ($s->telemetry_received && $s->rssi_dbm !== null) ? (int) $s->rssi_dbm : null,
                 'sent_total'           => (int) $s->sent_total,
                 'acked_total'          => (int) $s->acked_total,
@@ -214,6 +217,9 @@ class NodeLinkMetricsController extends Controller
                 'RSSI_Maximum_dBm',
                 'RSSI_Latest_dBm',
                 'Session_State',
+                'Sensor_Valid',
+                'Temperature_C',
+                'Humidity_Percent',
             ]);
 
             NodeLinkSample::where('room_id', $roomId)
@@ -251,6 +257,9 @@ class NodeLinkMetricsController extends Controller
                             '',
                             '',
                             $summary['state'],
+                            $s->sensor_valid ? 'TRUE' : 'FALSE',
+                            ($s->sensor_valid && $s->temperature_c !== null) ? number_format((float) $s->temperature_c, 2, '.', '') : '',
+                            ($s->sensor_valid && $s->humidity_percent !== null) ? number_format((float) $s->humidity_percent, 2, '.', '') : '',
                         ]);
                     }
                 });
@@ -289,6 +298,9 @@ class NodeLinkMetricsController extends Controller
                 $rssi['maximum_dbm'] !== null ? $rssi['maximum_dbm'] : '',
                 $rssi['latest_dbm'] !== null ? $rssi['latest_dbm'] : '',
                 $summary['state'],
+                '',
+                '',
+                '',
             ]);
 
             fclose($file);
