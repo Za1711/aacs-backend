@@ -123,7 +123,7 @@ class TelemetryController extends Controller
         $nodeConnected   = $acStatus ? (bool) $acStatus->node_connected : false;
 
         $activeSensorData = $sensorData;
-        $activeSource = ($sensor && $sensor->source && $sensor->source !== 'UNKNOWN') ? $sensor->source : $controlSource;
+        $activeSource = $sensorData['source'] ?? 'UNKNOWN';
 
         // node_battery_low = true hanya jika node connected, battery valid, fresh (tidak stale), dan millivolts <= 3300
         $isBatteryFreshAndValid = ($battery['valid'] === true) && ($battery['is_stale'] === false);

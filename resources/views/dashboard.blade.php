@@ -336,15 +336,15 @@
                     </button>
                 </div>
 
-                <!-- CARD: TELEMETRI NODE -->
+                <!-- CARD: RIWAYAT SUHU NODE -->
                 <div class="bg-slate-800/40 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between hover:border-slate-700 transition">
                     <div>
                         <div class="w-12 h-12 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center text-2xl mb-4">
                             🌱
                         </div>
-                        <h3 class="text-base font-bold text-white mb-1">Telemetri Node</h3>
+                        <h3 class="text-base font-bold text-white mb-1">Riwayat Suhu Node</h3>
                         <p class="text-xs text-slate-400 leading-relaxed mb-4">
-                            Riwayat suhu dan kelembapan SHT31 Node.
+                            Hanya berisi suhu dan kelembapan Node. Tidak memuat metrik radio.
                         </p>
 
                         <div class="space-y-3 mb-6">
@@ -369,7 +369,7 @@
 
                     <button onclick="downloadIndependentCsv('node')" class="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-semibold text-xs transition flex items-center justify-center space-x-2 shadow-lg shadow-emerald-600/20">
                         <span>📥</span>
-                        <span>Unduh CSV Node</span>
+                        <span>Unduh CSV Suhu Node</span>
                     </button>
                 </div>
 
@@ -430,6 +430,125 @@
                 </span>
             </div>
 
+            <!-- KARTU MENONJOL: DATA LENGKAP NODE — RSSI & PDR -->
+            <div class="bg-gradient-to-br from-purple-900/40 via-slate-800/80 to-slate-900/90 border-2 border-purple-500/40 rounded-2xl p-6 sm:p-7 shadow-2xl shadow-purple-950/60 mb-8 backdrop-blur transition">
+                <div class="flex flex-col md:flex-row md:items-start justify-between gap-4 mb-6 pb-6 border-b border-purple-500/20">
+                    <div class="flex items-start space-x-4">
+                        <div class="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-purple-500/20 text-purple-300 border border-purple-500/40 flex items-center justify-center text-2xl sm:text-3xl shrink-0 shadow-lg shadow-purple-500/20">
+                            📊
+                        </div>
+                        <div>
+                            <div class="flex items-center space-x-2">
+                                <span class="px-2 py-0.5 rounded text-[10px] font-extrabold tracking-wider uppercase bg-purple-600 text-white shadow-sm">Utama</span>
+                                <h3 class="text-lg sm:text-xl font-extrabold text-white">Data Lengkap Node — RSSI & PDR</h3>
+                            </div>
+                            <p class="text-xs sm:text-sm text-slate-300 mt-1 leading-relaxed">
+                                Data per pengiriman Node: suhu, kelembapan, baterai, RSSI, keberhasilan paket, dan PDR.
+                            </p>
+                            <p class="text-[11px] sm:text-xs text-purple-300/90 mt-2 flex items-center space-x-1.5">
+                                <span>ℹ️</span>
+                                <span>RSSI dan PDR dianalisis per sesi boot Node. Sesi firmware lama mungkin tidak memiliki suhu dan kelembapan pada link metrics.</span>
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                @if(empty($sessions))
+                    <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-6 text-center">
+                        <p class="text-slate-400 text-sm font-medium">Belum ada sesi Node yang tersedia.</p>
+                        <div class="mt-4 flex flex-col sm:flex-row items-center justify-center gap-4">
+                            <select id="prominentSessionSelect" disabled class="bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-600 opacity-50 cursor-not-allowed">
+                                <option>Tidak ada sesi</option>
+                            </select>
+                            <button id="prominentDownloadBtn" disabled class="px-5 py-2.5 rounded-xl bg-purple-950/40 border border-purple-900/30 text-purple-400/40 text-xs font-semibold cursor-not-allowed">
+                                Unduh CSV Lengkap Node
+                            </button>
+                        </div>
+                    </div>
+                @else
+                    @php
+                        $latestSession = $sessions[0];
+                    @endphp
+                    <div class="space-y-6">
+                        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-slate-900/60 p-4 rounded-xl border border-purple-500/20">
+                            <div class="flex flex-col sm:flex-row sm:items-center gap-3">
+                                <label for="prominentSessionSelect" class="text-xs font-bold text-purple-200 uppercase tracking-wider shrink-0">Pilih Session ID:</label>
+                                <select id="prominentSessionSelect" onchange="updateProminentSessionDetails(this.value)" class="bg-slate-950 border border-purple-500/40 rounded-xl px-3 py-2 text-xs font-semibold text-white focus:outline-none focus:border-purple-400 transition w-full sm:w-auto">
+                                    @foreach($sessions as $idx => $s)
+                                        <option value="{{ $s['session_id'] }}" {{ $idx === 0 ? 'selected' : '' }}>
+                                            Session ID: {{ $s['session_id'] }} ({{ $s['state'] }}) — {{ $s['first_at'] }}
+                                        </option>
+                                    @endforeach
+                                </select>
+                            </div>
+                            <a id="prominentDownloadBtn" 
+                               href="/api/v1/rooms/{{ $currentRoom->id }}/node-link-sessions/{{ $latestSession['session_id'] }}/export.csv"
+                               download="node_link_metrics_room_{{ $currentRoom->id }}_session_{{ $latestSession['session_id'] }}.csv"
+                               class="inline-flex items-center justify-center space-x-2 px-5 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 active:from-purple-700 active:to-indigo-700 text-white text-xs font-bold rounded-xl shadow-lg shadow-purple-600/30 transition shrink-0">
+                                <span>📥</span>
+                                <span>Unduh CSV Lengkap Node</span>
+                            </a>
+                        </div>
+
+                        <!-- Panel Detail Sesi Terpilih -->
+                        <div id="prominentSessionDetails" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                            <div class="bg-slate-900/70 border border-slate-800 rounded-xl p-3.5">
+                                <div class="text-[10px] uppercase font-bold text-slate-400 mb-1">Session ID & Status</div>
+                                <div class="flex items-center space-x-2">
+                                    <span id="detailSessionId" class="text-base font-bold text-white">{{ $latestSession['session_id'] }}</span>
+                                    <span id="detailBadge">
+                                        @if($latestSession['state'] === 'COMPLETED')
+                                            <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">SELESAI</span>
+                                        @elseif($latestSession['state'] === 'ACTIVE')
+                                            <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-sky-500/20 text-sky-400 border border-sky-500/30">BERJALAN / AKTIF</span>
+                                        @else
+                                            <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30">TERHENTI / STALE</span>
+                                        @endif
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div class="bg-slate-900/70 border border-slate-800 rounded-xl p-3.5">
+                                <div class="text-[10px] uppercase font-bold text-slate-400 mb-1">PDR (Keberhasilan)</div>
+                                <div class="text-base font-bold text-emerald-400">
+                                    <span id="detailPdr">{{ $latestSession['pdr'] }}%</span>
+                                </div>
+                                <div class="text-[11px] text-slate-400 mt-0.5">
+                                    <span id="detailSentAck">{{ $latestSession['sent_total'] }} sent / {{ $latestSession['acked_total'] }} ack ({{ $latestSession['failed_total'] }} gagal)</span>
+                                </div>
+                            </div>
+
+                            <div class="bg-slate-900/70 border border-slate-800 rounded-xl p-3.5">
+                                <div class="text-[10px] uppercase font-bold text-slate-400 mb-1">RSSI Rata-rata</div>
+                                <div class="text-base font-bold text-purple-300">
+                                    <span id="detailRssi">{{ $latestSession['rssi_avg'] !== '-' ? $latestSession['rssi_avg'] . ' dBm' : '-' }}</span>
+                                </div>
+                                <div class="text-[11px] text-slate-400 mt-0.5">
+                                    Samples Visible: <span id="detailSamplesVisible" class="text-slate-200 font-semibold">{{ $latestSession['samples_count'] }}</span>
+                                </div>
+                            </div>
+
+                            <div class="bg-slate-900/70 border border-slate-800 rounded-xl p-3.5">
+                                <div class="text-[10px] uppercase font-bold text-slate-400 mb-1">Baterai (Awal &rarr; Terakhir)</div>
+                                <div class="text-base font-bold text-amber-300">
+                                    <span id="detailBattery">{{ $latestSession['battery_start'] ?? '-' }}% &rarr; {{ $latestSession['battery_end'] ?? '-' }}%</span>
+                                </div>
+                                <div class="text-[11px] text-slate-400 mt-0.5">
+                                    Tegangan akhir: <span id="detailBatteryMv">{{ $latestSession['battery_mv_end'] ?? '-' }}</span> mV
+                                </div>
+                            </div>
+
+                            <div class="bg-slate-900/70 border border-slate-800 rounded-xl p-3.5 col-span-2 sm:col-span-3 lg:col-span-4">
+                                <div class="text-[10px] uppercase font-bold text-slate-400 mb-1">Rentang Waktu (WIB)</div>
+                                <div class="text-xs text-slate-200 font-mono">
+                                    Mulai: <span id="detailFirstAt" class="text-slate-100 font-semibold">{{ $latestSession['first_at'] }}</span> &bull; Terakhir: <span id="detailLastAt" class="text-slate-100 font-semibold">{{ $latestSession['last_at'] }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                @endif
+            </div>
+
             @if(empty($sessions))
                 <div class="bg-slate-800/40 border border-slate-800 rounded-2xl p-8 text-center text-slate-400 text-sm">
                     Belum ada sesi link metrics yang tercatat untuk ruangan ini.
@@ -445,13 +564,17 @@
                                 <div>
                                     <div class="flex items-center space-x-3 mb-1">
                                         <span class="font-bold text-white text-base">Session ID: {{ $s['session_id'] }}</span>
-                                        @if($s['is_complete'])
+                                        @if($s['state'] === 'COMPLETED')
                                             <span class="px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                                                ✓ SELESAI (≤ 20%)
+                                                SELESAI
+                                            </span>
+                                        @elseif($s['state'] === 'ACTIVE')
+                                            <span class="px-2 py-0.5 rounded text-[11px] font-bold bg-sky-500/20 text-sky-400 border border-sky-500/30">
+                                                BERJALAN / AKTIF
                                             </span>
                                         @else
-                                            <span class="px-2 py-0.5 rounded text-[11px] font-bold bg-sky-500/20 text-sky-400 border border-sky-500/30">
-                                                ● BERJALAN / AKTIF
+                                            <span class="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                                                TERHENTI / STALE
                                             </span>
                                         @endif
                                     </div>
@@ -539,6 +662,56 @@ print("RSSI valid terbaru (dBm):", summary["RSSI_Latest_dBm"])</code></pre>
     <!-- Client-side script for dynamic URL handling -->
     <script>
         const roomId = {{ $currentRoom ? $currentRoom->id : 119 }};
+        const sessionsData = @json($sessions);
+
+        function updateProminentSessionDetails(sessionId) {
+            const s = sessionsData.find(item => String(item.session_id) === String(sessionId));
+            if (!s) return;
+
+            const idEl = document.getElementById('detailSessionId');
+            if (idEl) idEl.textContent = s.session_id;
+
+            let badgeHtml = '';
+            if (s.state === 'COMPLETED') {
+                badgeHtml = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">SELESAI</span>';
+            } else if (s.state === 'ACTIVE') {
+                badgeHtml = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-sky-500/20 text-sky-400 border border-sky-500/30">BERJALAN / AKTIF</span>';
+            } else {
+                badgeHtml = '<span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30">TERHENTI / STALE</span>';
+            }
+            const badgeEl = document.getElementById('detailBadge');
+            if (badgeEl) badgeEl.innerHTML = badgeHtml;
+
+            const pdrEl = document.getElementById('detailPdr');
+            if (pdrEl) pdrEl.textContent = s.pdr + '%';
+
+            const sentAckEl = document.getElementById('detailSentAck');
+            if (sentAckEl) sentAckEl.textContent = `${s.sent_total} sent / ${s.acked_total} ack (${s.failed_total} gagal)`;
+
+            const rssiEl = document.getElementById('detailRssi');
+            if (rssiEl) rssiEl.textContent = s.rssi_avg !== '-' ? (s.rssi_avg + ' dBm') : '-';
+
+            const samplesEl = document.getElementById('detailSamplesVisible');
+            if (samplesEl) samplesEl.textContent = s.samples_count;
+
+            const battEl = document.getElementById('detailBattery');
+            if (battEl) battEl.innerHTML = `${s.battery_start ?? '-'}% &rarr; ${s.battery_end ?? '-'}%`;
+
+            const battMvEl = document.getElementById('detailBatteryMv');
+            if (battMvEl) battMvEl.textContent = s.battery_mv_end ?? '-';
+
+            const firstAtEl = document.getElementById('detailFirstAt');
+            if (firstAtEl) firstAtEl.textContent = s.first_at;
+
+            const lastAtEl = document.getElementById('detailLastAt');
+            if (lastAtEl) lastAtEl.textContent = s.last_at;
+
+            const btn = document.getElementById('prominentDownloadBtn');
+            if (btn) {
+                btn.href = `/api/v1/rooms/${roomId}/node-link-sessions/${s.session_id}/export.csv`;
+                btn.setAttribute('download', `node_link_metrics_room_${roomId}_session_${s.session_id}.csv`);
+            }
+        }
 
         function switchRoom(id) {
             window.location.href = '/?room_id=' + id;

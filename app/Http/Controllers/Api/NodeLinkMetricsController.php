@@ -192,74 +192,90 @@ class NodeLinkMetricsController extends Controller
 
             fputcsv($file, [
                 'Record_Type',
-                'ID',
                 'Room_ID',
                 'Session_ID',
                 'Telemetry_Seq',
                 'Telemetry_Packet_Seq',
                 'Timestamp_UTC',
                 'Timestamp_WIB',
+                'Sensor_Valid',
+                'Temperature_C',
+                'Humidity_Percent',
+                'Battery_Valid',
+                'Battery_mV',
+                'Battery_Percent',
+                'RSSI_dBm',
+                'Delivery_Success',
+                'Telemetry_Received',
                 'Sent_Total',
                 'Acked_Total',
                 'Failed_Total',
                 'Retries_Total',
                 'PDR_Percent',
-                'Delivery_Success',
-                'Telemetry_Received',
-                'Battery_Valid',
-                'Battery_mV',
-                'Battery_Percent',
-                'RSSI_dBm',
+                'Sequence_Gap',
                 'Test_Complete',
+                'Session_State',
                 'RSSI_Valid_Count',
                 'RSSI_Average_dBm',
                 'RSSI_Minimum_dBm',
                 'RSSI_Maximum_dBm',
                 'RSSI_Latest_dBm',
-                'Session_State',
-                'Sensor_Valid',
-                'Temperature_C',
-                'Humidity_Percent',
+                'Samples_Visible',
+                'Unobserved_Sample_Rows',
+                'Data_Completeness_Percent',
             ]);
+
+            $prevSeq = null;
 
             NodeLinkSample::where('room_id', $roomId)
                 ->where('session_id', $sessionId)
                 ->orderBy('telemetry_seq', 'asc')
-                ->chunk(500, function ($samples) use ($file, $summary) {
+                ->chunk(500, function ($samples) use ($file, $summary, &$prevSeq) {
                     foreach ($samples as $s) {
                         $utcTs = Carbon::parse($s->received_at, 'UTC')->utc()->toIso8601ZuluString();
                         $wibTs = Carbon::parse($s->received_at, 'UTC')->setTimezone('Asia/Jakarta')->format('Y-m-d H:i:s');
 
+                        $currSeq = (int) $s->telemetry_seq;
+                        if ($prevSeq === null) {
+                            $sequenceGap = max(0, $currSeq - 1);
+                        } else {
+                            $sequenceGap = max(0, $currSeq - $prevSeq - 1);
+                        }
+                        $prevSeq = $currSeq;
+
                         fputcsv($file, [
                             'SAMPLE',
-                            $s->id,
                             $s->room_id,
                             $s->session_id,
                             $s->telemetry_seq,
                             $s->telemetry_packet_seq,
                             $utcTs,
                             $wibTs,
+                            $s->sensor_valid ? 'TRUE' : 'FALSE',
+                            ($s->sensor_valid && $s->temperature_c !== null) ? number_format((float) $s->temperature_c, 2, '.', '') : '',
+                            ($s->sensor_valid && $s->humidity_percent !== null) ? number_format((float) $s->humidity_percent, 2, '.', '') : '',
+                            $s->battery_valid ? 'TRUE' : 'FALSE',
+                            ($s->battery_valid && $s->battery_mv !== null) ? $s->battery_mv : '',
+                            ($s->battery_valid && $s->battery_percent !== null) ? $s->battery_percent : '',
+                            ($s->telemetry_received && $s->rssi_dbm !== null) ? $s->rssi_dbm : '',
+                            $s->telemetry_acked ? 'TRUE' : 'FALSE',
+                            $s->telemetry_received ? 'TRUE' : 'FALSE',
                             $s->sent_total,
                             $s->acked_total,
                             $s->failed_total,
                             $s->retries_total,
                             sprintf('%.3f', (float) $s->pdr),
-                            $s->telemetry_acked ? 'TRUE' : 'FALSE',
-                            $s->telemetry_received ? 'TRUE' : 'FALSE',
-                            $s->battery_valid ? 'TRUE' : 'FALSE',
-                            ($s->battery_valid && $s->battery_mv !== null) ? $s->battery_mv : '',
-                            ($s->battery_valid && $s->battery_percent !== null) ? $s->battery_percent : '',
-                            ($s->telemetry_received && $s->rssi_dbm !== null) ? $s->rssi_dbm : '',
+                            $sequenceGap,
                             $s->test_complete ? 'TRUE' : 'FALSE',
-                            '',
-                            '',
-                            '',
-                            '',
-                            '',
                             $summary['state'],
-                            $s->sensor_valid ? 'TRUE' : 'FALSE',
-                            ($s->sensor_valid && $s->temperature_c !== null) ? number_format((float) $s->temperature_c, 2, '.', '') : '',
-                            ($s->sensor_valid && $s->humidity_percent !== null) ? number_format((float) $s->humidity_percent, 2, '.', '') : '',
+                            '',
+                            '',
+                            '',
+                            '',
+                            '',
+                            '',
+                            '',
+                            '',
                         ]);
                     }
                 });
@@ -269,38 +285,47 @@ class NodeLinkMetricsController extends Controller
             $batteryCurrent = $summary['battery_current'];
             $sent = (int) $summary['sent_total'];
             $acked = (int) $summary['acked_total'];
+            $failed = (int) $summary['failed_total'];
+            $retries = (int) $summary['retries_total'];
             $pdr3 = $sent > 0 ? sprintf('%.3f', round(100.0 * $acked / $sent, 3)) : '';
+
+            $samplesVisible = (int) NodeLinkSample::where('room_id', $roomId)->where('session_id', $sessionId)->count();
+            $unobservedRows = max(0, $sent - $samplesVisible);
+            $dataCompletenessPercent = $sent > 0 ? ($samplesVisible / $sent * 100.0) : null;
 
             fputcsv($file, [
                 'SUMMARY',
-                '',
                 $roomId,
                 $sessionId,
-                '',
-                '',
-                '',
-                '',
-                $summary['sent_total'],
-                $summary['acked_total'],
-                $summary['failed_total'],
-                $summary['retries_total'],
-                $pdr3,
-                '',
-                '',
+                '', // Telemetry_Seq
+                '', // Telemetry_Packet_Seq
+                '', // Timestamp_UTC
+                '', // Timestamp_WIB
+                '', // Sensor_Valid
+                '', // Temperature_C
+                '', // Humidity_Percent
                 $batteryCurrent && $batteryCurrent['valid'] ? 'TRUE' : 'FALSE',
                 $batteryCurrent && $batteryCurrent['millivolts'] !== null ? $batteryCurrent['millivolts'] : '',
                 $batteryCurrent && $batteryCurrent['percent'] !== null ? $batteryCurrent['percent'] : '',
-                '',
+                '', // RSSI_dBm
+                '', // Delivery_Success
+                '', // Telemetry_Received
+                $sent,
+                $acked,
+                $failed,
+                $retries,
+                $pdr3,
+                '', // Sequence_Gap
                 $summary['test_complete'] ? 'TRUE' : 'FALSE',
+                $summary['state'],
                 $rssi['count'],
                 $rssi['average_dbm'] !== null ? sprintf('%.2f', $rssi['average_dbm']) : '',
                 $rssi['minimum_dbm'] !== null ? $rssi['minimum_dbm'] : '',
                 $rssi['maximum_dbm'] !== null ? $rssi['maximum_dbm'] : '',
                 $rssi['latest_dbm'] !== null ? $rssi['latest_dbm'] : '',
-                $summary['state'],
-                '',
-                '',
-                '',
+                $samplesVisible,
+                $unobservedRows,
+                $dataCompletenessPercent !== null ? sprintf('%.3f', $dataCompletenessPercent) : '',
             ]);
 
             fclose($file);

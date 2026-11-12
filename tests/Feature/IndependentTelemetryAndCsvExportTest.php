@@ -674,12 +674,13 @@ class IndependentTelemetryAndCsvExportTest extends TestCase
         $response->assertStatus(200);
 
         $response->assertSee('Telemetri Remote');
-        $response->assertSee('Telemetri Node');
+        $response->assertSee('Riwayat Suhu Node');
         $response->assertSee('Perbandingan Remote & Node', false);
         $response->assertSee('Unduh CSV Remote');
-        $response->assertSee('Unduh CSV Node');
+        $response->assertSee('Unduh CSV Suhu Node');
         $response->assertSee('Unduh CSV Perbandingan');
         $response->assertSee('Telemetri Node & Link Metrics ESP-NOW', false);
+        $response->assertSee('Data Lengkap Node — RSSI & PDR', false);
     }
 
     /**

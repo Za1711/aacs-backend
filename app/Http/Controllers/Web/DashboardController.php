@@ -42,6 +42,9 @@ class DashboardController extends Controller
                 ->orderByDesc('session_id')
                 ->pluck('session_id');
 
+            $timeout = (int) config('aacs.node_link_active_timeout_seconds', 30);
+            $now = Carbon::now('UTC');
+
             foreach ($sessionIds as $sId) {
                 $lastSample = NodeLinkSample::where('room_id', $currentRoom->id)
                     ->where('session_id', $sId)
@@ -62,18 +65,37 @@ class DashboardController extends Controller
                     ->where('test_complete', true)
                     ->exists();
 
+                $lastSampleAt = $lastSample?->received_at ? Carbon::parse($lastSample->received_at)->utc() : null;
+                $ageSeconds = $lastSampleAt ? max(0, $now->getTimestamp() - $lastSampleAt->getTimestamp()) : 999999;
+
+                if ($isComplete) {
+                    $sessionState = 'COMPLETED';
+                } elseif ($ageSeconds <= $timeout) {
+                    $sessionState = 'ACTIVE';
+                } else {
+                    $sessionState = 'STALE';
+                }
+
                 $sent = $lastSample?->sent_total ?? 0;
                 $acked = $lastSample?->acked_total ?? 0;
                 $pdr = $sent > 0 ? round(100.0 * $acked / $sent, 2) : 0;
 
+                $rssiAvg = NodeLinkSample::where('room_id', $currentRoom->id)
+                    ->where('session_id', $sId)
+                    ->where('telemetry_received', true)
+                    ->whereNotNull('rssi_dbm')
+                    ->avg('rssi_dbm');
+
                 $sessions[] = [
                     'session_id'    => $sId,
+                    'state'         => $sessionState,
                     'samples_count' => $samplesCount,
                     'sent_total'    => $sent,
                     'acked_total'   => $acked,
                     'failed_total'  => $lastSample?->failed_total ?? 0,
                     'retries_total' => $lastSample?->retries_total ?? 0,
                     'pdr'           => $pdr,
+                    'rssi_avg'      => $rssiAvg !== null ? round((float) $rssiAvg, 2) : '-',
                     'battery_start' => $firstSample?->battery_percent,
                     'battery_end'   => $lastSample?->battery_percent,
                     'battery_mv_end'=> $lastSample?->battery_mv,

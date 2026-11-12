@@ -661,7 +661,10 @@ class NodeLinkMetricsTest extends TestCase
         $lines = array_filter(explode("\n", str_replace(["\r\n", "\r"], "\n", $content)));
 
         // Header check
-        $this->assertStringContainsString('Record_Type,ID,Room_ID,Session_ID,Telemetry_Seq', $lines[0]);
+        $this->assertStringContainsString('Record_Type,Room_ID,Session_ID,Telemetry_Seq,Telemetry_Packet_Seq', $lines[0]);
+        $this->assertStringContainsString('RSSI_dBm', $lines[0]);
+        $this->assertStringContainsString('PDR_Percent', $lines[0]);
+        $this->assertStringContainsString('Sequence_Gap', $lines[0]);
 
         $sampleLines = [];
         $summaryLines = [];
@@ -677,7 +680,7 @@ class NodeLinkMetricsTest extends TestCase
         // 16. Memuat satu row SAMPLE untuk setiap sampel database (3 sampel)
         $this->assertCount(3, $sampleLines);
         // Pastikan row gagal memuat FALSE,FALSE
-        $this->assertStringContainsString('FALSE,FALSE,TRUE,3946,94,,FALSE', $sampleLines[2]);
+        $this->assertStringContainsString('TRUE,3946,94,,FALSE,FALSE,3,2,1', $sampleLines[2]);
 
         // 17 & 18. Baris SUMMARY selalu tepat satu baris dan merupakan baris terakhir
         $this->assertCount(1, $summaryLines);
@@ -686,22 +689,26 @@ class NodeLinkMetricsTest extends TestCase
 
         // Check nilai summary
         $summaryParts = str_getcsv($summaryLines[0]);
-        // Sent_Total = 3, Acked_Total = 2, Failed_Total = 1 (karena Timestamp_UTC dan Timestamp_WIB ada di indeks 6 & 7)
-        $this->assertEquals(3, $summaryParts[8]);
-        $this->assertEquals(2, $summaryParts[9]);
-        $this->assertEquals(1, $summaryParts[10]);
+        // Sent_Total = 3, Acked_Total = 2, Failed_Total = 1
+        $this->assertEquals(3, $summaryParts[16]);
+        $this->assertEquals(2, $summaryParts[17]);
+        $this->assertEquals(1, $summaryParts[18]);
         // PDR = 66.667
-        $this->assertEquals('66.667', $summaryParts[12]);
+        $this->assertEquals('66.667', $summaryParts[20]);
         // RSSI Valid Count = 2
-        $this->assertEquals('2', $summaryParts[20]);
+        $this->assertEquals('2', $summaryParts[24]);
         // RSSI Average = -69.00
-        $this->assertEquals('-69.00', $summaryParts[21]);
+        $this->assertEquals('-69.00', $summaryParts[25]);
         // RSSI Minimum = -70
-        $this->assertEquals('-70', $summaryParts[22]);
+        $this->assertEquals('-70', $summaryParts[26]);
         // RSSI Maximum = -68
-        $this->assertEquals('-68', $summaryParts[23]);
+        $this->assertEquals('-68', $summaryParts[27]);
         // RSSI Latest = -70
-        $this->assertEquals('-70', $summaryParts[24]);
+        $this->assertEquals('-70', $summaryParts[28]);
+        // Samples Visible = 3, Unobserved = 0, Completeness = 100.000
+        $this->assertEquals('3', $summaryParts[29]);
+        $this->assertEquals('0', $summaryParts[30]);
+        $this->assertEquals('100.000', $summaryParts[31]);
     }
 
     /**
