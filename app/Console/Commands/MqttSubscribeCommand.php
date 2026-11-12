@@ -655,6 +655,60 @@ class MqttSubscribeCommand extends Command
         // HANDLER 3: NODE_OFFLINE
         // ==========================================
         if ($type === 'NODE_OFFLINE') {
+            $confirmSeconds = (int) config('aacs.node_offline_confirm_seconds', 60);
+            $minOfflineMs   = $confirmSeconds * 1000;
+
+            // 1. Validasi offline_for_ms jika tersedia (firmware terbaru)
+            if (array_key_exists('offline_for_ms', $data)) {
+                $offlineForMs = $data['offline_for_ms'];
+                if (!is_int($offlineForMs) || $offlineForMs < $minOfflineMs) {
+                    Log::info("[NOTIFICATION] Event NODE_OFFLINE dini atau tidak valid diabaikan untuk room {$roomId}. offline_for_ms=" . json_encode($offlineForMs) . " (minimal {$minOfflineMs} ms).");
+                    return true;
+                }
+            }
+
+            // 2. Periksa bukti kontak Node terbaru (kompatibilitas firmware lama & perlindungan event tertunda)
+            $isRecentContact = function ($timestamp) use ($confirmSeconds): bool {
+                if (!$timestamp) {
+                    return false;
+                }
+                $carbon = $timestamp instanceof Carbon ? $timestamp : Carbon::parse($timestamp);
+                $diff = now()->getTimestamp() - $carbon->getTimestamp();
+                return $diff >= -5 && $diff < $confirmSeconds;
+            };
+
+            // Sumber kontak 1: NodeTelemetryStatus.received_at
+            $telemetryStatus = NodeTelemetryStatus::where('room_id', $roomId)->first();
+            if ($telemetryStatus && $isRecentContact($telemetryStatus->received_at)) {
+                Log::info("[NOTIFICATION] Event NODE_OFFLINE diabaikan untuk room {$roomId}: terdapat bukti kontak NodeTelemetryStatus terbaru ({$telemetryStatus->received_at}).");
+                return true;
+            }
+
+            // Sumber kontak 2: NodeBatteryStatus.received_at
+            $batteryStatus = NodeBatteryStatus::where('room_id', $roomId)->first();
+            if ($batteryStatus && $isRecentContact($batteryStatus->received_at)) {
+                Log::info("[NOTIFICATION] Event NODE_OFFLINE diabaikan untuk room {$roomId}: terdapat bukti kontak NodeBatteryStatus terbaru ({$batteryStatus->received_at}).");
+                return true;
+            }
+
+            // Sumber kontak 3: NodeLinkSample.received_at (sampel gagal pun membuktikan Node masih aktif)
+            $latestLinkSample = NodeLinkSample::where('room_id', $roomId)->latest('received_at')->first();
+            if ($latestLinkSample && $isRecentContact($latestLinkSample->received_at)) {
+                Log::info("[NOTIFICATION] Event NODE_OFFLINE diabaikan untuk room {$roomId}: terdapat bukti kontak NodeLinkSample terbaru ({$latestLinkSample->received_at}).");
+                return true;
+            }
+
+            // Sumber kontak 4: AcLog terbaru dengan node_connected = true
+            $latestConnectedAcLog = AcLog::where('room_id', $roomId)
+                ->where('node_connected', true)
+                ->latest('created_at')
+                ->first();
+            if ($latestConnectedAcLog && $isRecentContact($latestConnectedAcLog->created_at)) {
+                Log::info("[NOTIFICATION] Event NODE_OFFLINE diabaikan untuk room {$roomId}: terdapat bukti kontak AcLog (node_connected=true) terbaru ({$latestConnectedAcLog->created_at}).");
+                return true;
+            }
+
+            // 3. Deduplikasi notifikasi
             $windowTs = intdiv(time(), 30) * 30;
             $dedupKey = hash('sha256', "room_{$roomId}_NODE_OFFLINE_{$windowTs}");
 
@@ -683,6 +737,7 @@ class MqttSubscribeCommand extends Command
                             'node_connected'   => false,
                             'node_battery_low' => false,
                             'control_source'   => 'REMOTE',
+                            'node_paired'      => true,
                         ]);
                     } else {
                         AcLog::create([

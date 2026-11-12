@@ -10,6 +10,10 @@ use App\Models\DeviceToken;
 use App\Models\Notification;
 use App\Models\Room;
 use App\Models\User;
+use App\Models\NodeLinkSample;
+use App\Models\NodeTelemetryStatus;
+use App\Models\NodeBatteryStatus;
+use Carbon\Carbon;
 use App\Services\FirebaseMessagingService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
@@ -185,6 +189,9 @@ class NodeAndNotificationFollowupTest extends TestCase
     {
         Bus::fake();
 
+        $baselineTime = Carbon::now();
+        Carbon::setTestNow($baselineTime->copy()->subSeconds(70));
+
         AcLog::create([
             'room_id'          => $this->room->id,
             'ac_brand'         => $this->room->ac_brand,
@@ -199,6 +206,8 @@ class NodeAndNotificationFollowupTest extends TestCase
             'node_connected'   => true,
             'node_battery_low' => false,
         ]);
+
+        Carbon::setTestNow($baselineTime);
 
         $payload = json_encode([
             'type'    => 'NODE_OFFLINE',
@@ -229,6 +238,8 @@ class NodeAndNotificationFollowupTest extends TestCase
                 && $job->data['type'] === 'NODE_OFFLINE'
                 && $job->data['room_id'] === (string) $this->room->id;
         });
+
+        Carbon::setTestNow();
     }
 
     // ── 5. NODE_BATTERY_LOW: state update ke REMOTE & push 'Baterai Node Rendah'
@@ -412,5 +423,374 @@ class NodeAndNotificationFollowupTest extends TestCase
         $response->assertStatus(200)
             ->assertJsonPath('data.control_source', 'REMOTE')
             ->assertJsonPath('data.ac_status.control_source', 'REMOTE');
+    }
+
+    // ── 10. Satu sampel gagal dengan NodeLinkSample terbaru tidak menghasilkan push ─
+    #[Test]
+    public function single_failed_sample_with_recent_node_link_sample_does_not_produce_push(): void
+    {
+        Bus::fake();
+
+        // AcLog awal dengan USER_NODE dan node_connected=true
+        AcLog::create([
+            'room_id'          => $this->room->id,
+            'ac_brand'         => $this->room->ac_brand,
+            'power'            => 'ON',
+            'setpoint'         => 24,
+            'mode'             => 'FUZZY',
+            'ac_mode'          => 'COOL',
+            'fan_speed'        => 'AUTO',
+            'swing'            => 'AUTO',
+            'control_source'   => 'USER_NODE',
+            'node_paired'      => true,
+            'node_connected'   => true,
+            'node_battery_low' => false,
+        ]);
+
+        // Satu paket gagal pada link metrics (telemetry_acked=false, telemetry_received=false, rssi_dbm=null)
+        $linkPayload = [
+            'version'              => 1,
+            'session_id'           => 12345,
+            'telemetry_seq'        => 1,
+            'telemetry_packet_seq' => 1,
+            'sent_total'           => 1,
+            'acked_total'          => 0,
+            'failed_total'         => 1,
+            'retries_total'        => 3,
+            'telemetry_acked'      => false,
+            'telemetry_received'   => false,
+            'battery_valid'        => true,
+            'battery_mv'           => 3800,
+            'battery_percent'      => 85,
+            'rssi_dbm'             => null,
+            'test_complete'        => false,
+        ];
+
+        $linkRes = $this->mqttCommand->handleNodeLinkMetrics("room/{$this->room->id}/node/link_metrics", json_encode($linkPayload));
+        $this->assertTrue($linkRes);
+
+        // Verifikasi sampel tersimpan dan membuktikan perangkat aktif (failed_total naik, pdr=0%, rssi null)
+        $sample = NodeLinkSample::where('room_id', $this->room->id)->first();
+        $this->assertNotNull($sample);
+        $this->assertEquals(1, $sample->failed_total);
+        $this->assertEquals(0.0, $sample->pdr);
+        $this->assertNull($sample->rssi_dbm);
+
+        // Event NODE_OFFLINE lama/tertunda datang
+        $offlinePayload = json_encode([
+            'type'               => 'NODE_OFFLINE',
+            'room_id'            => (string) $this->room->id,
+            'message'            => 'Node sensor terputus; sumber dipindahkan ke Remote',
+            'offline_for_ms'     => 60000,
+            'offline_timeout_ms' => 60000,
+        ]);
+
+        $res = $this->mqttCommand->handleNotification("room/{$this->room->id}/notification", $offlinePayload);
+        $this->assertTrue($res);
+
+        // Tidak boleh membuat Notification NODE_OFFLINE
+        $this->assertDatabaseMissing('notifications', [
+            'room_id' => $this->room->id,
+            'type'    => 'NODE_OFFLINE',
+        ]);
+
+        // Tidak boleh dispatch push FCM
+        Bus::assertNotDispatched(SendFcmNotificationJob::class);
+
+        // State control_source dan node_connected tetap tidak berubah
+        $latestLog = AcLog::where('room_id', $this->room->id)->latest('created_at')->first();
+        $this->assertEquals('USER_NODE', $latestLog->control_source);
+        $this->assertTrue($latestLog->node_connected);
+    }
+
+    // ── 11. Event dengan offline_for_ms = 5000 diabaikan ──────────────────────
+    #[Test]
+    public function premature_node_offline_event_with_short_offline_for_ms_is_ignored(): void
+    {
+        Bus::fake();
+
+        $baselineTime = Carbon::now();
+        Carbon::setTestNow($baselineTime->copy()->subSeconds(75));
+
+        AcLog::create([
+            'room_id'          => $this->room->id,
+            'ac_brand'         => $this->room->ac_brand,
+            'power'            => 'ON',
+            'setpoint'         => 24,
+            'mode'             => 'FUZZY',
+            'ac_mode'          => 'COOL',
+            'fan_speed'        => 'AUTO',
+            'swing'            => 'AUTO',
+            'control_source'   => 'USER_NODE',
+            'node_paired'      => true,
+            'node_connected'   => true,
+            'node_battery_low' => false,
+        ]);
+
+        Carbon::setTestNow($baselineTime);
+
+        $payload = json_encode([
+            'type'               => 'NODE_OFFLINE',
+            'room_id'            => (string) $this->room->id,
+            'message'            => 'Node sensor terputus dini',
+            'offline_for_ms'     => 5000,
+            'offline_timeout_ms' => 60000,
+        ]);
+
+        $res = $this->mqttCommand->handleNotification("room/{$this->room->id}/notification", $payload);
+        $this->assertTrue($res);
+
+        // Tidak membuat notification
+        $this->assertDatabaseMissing('notifications', [
+            'room_id' => $this->room->id,
+            'type'    => 'NODE_OFFLINE',
+        ]);
+
+        Bus::assertNotDispatched(SendFcmNotificationJob::class);
+
+        // AcLog tidak berubah
+        $latestLog = AcLog::where('room_id', $this->room->id)->latest('created_at')->first();
+        $this->assertEquals('USER_NODE', $latestLog->control_source);
+        $this->assertTrue($latestLog->node_connected);
+
+        Carbon::setTestNow();
+    }
+
+    // ── 12. Event lama setelah Node pulih diabaikan ───────────────────────────
+    #[Test]
+    public function stale_node_offline_event_after_node_recovered_is_ignored(): void
+    {
+        Bus::fake();
+
+        AcLog::create([
+            'room_id'          => $this->room->id,
+            'ac_brand'         => $this->room->ac_brand,
+            'power'            => 'ON',
+            'setpoint'         => 24,
+            'mode'             => 'FUZZY',
+            'ac_mode'          => 'COOL',
+            'fan_speed'        => 'AUTO',
+            'swing'            => 'AUTO',
+            'control_source'   => 'USER_NODE',
+            'node_paired'      => true,
+            'node_connected'   => true,
+            'node_battery_low' => false,
+        ]);
+
+        // Node sudah pulih dan mengirim telemetri status 5 detik yang lalu
+        NodeTelemetryStatus::updateOrCreate(
+            ['room_id' => $this->room->id],
+            [
+                'valid'       => true,
+                'temperature' => 26.5,
+                'humidity'    => 60.0,
+                'received_at' => Carbon::now()->subSeconds(5),
+            ]
+        );
+
+        $payload = json_encode([
+            'type'               => 'NODE_OFFLINE',
+            'room_id'            => (string) $this->room->id,
+            'message'            => 'Node sensor terputus lama',
+            'offline_for_ms'     => 60000,
+            'offline_timeout_ms' => 60000,
+        ]);
+
+        $res = $this->mqttCommand->handleNotification("room/{$this->room->id}/notification", $payload);
+        $this->assertTrue($res);
+
+        $this->assertDatabaseMissing('notifications', [
+            'room_id' => $this->room->id,
+            'type'    => 'NODE_OFFLINE',
+        ]);
+
+        Bus::assertNotDispatched(SendFcmNotificationJob::class);
+
+        $latestLog = AcLog::where('room_id', $this->room->id)->latest('created_at')->first();
+        $this->assertEquals('USER_NODE', $latestLog->control_source);
+        $this->assertTrue($latestLog->node_connected);
+    }
+
+    // ── 13. Event dengan offline_for_ms >= 60000 dan tanpa bukti kontak baru diproses ─
+    #[Test]
+    public function confirmed_node_offline_event_with_valid_duration_and_no_recent_contact_is_processed(): void
+    {
+        Bus::fake();
+
+        $baselineTime = Carbon::now();
+        Carbon::setTestNow($baselineTime->copy()->subSeconds(75));
+
+        AcLog::create([
+            'room_id'          => $this->room->id,
+            'ac_brand'         => $this->room->ac_brand,
+            'power'            => 'ON',
+            'setpoint'         => 24,
+            'mode'             => 'FUZZY',
+            'ac_mode'          => 'COOL',
+            'fan_speed'        => 'AUTO',
+            'swing'            => 'AUTO',
+            'control_source'   => 'USER_NODE',
+            'node_paired'      => true,
+            'node_connected'   => true,
+            'node_battery_low' => false,
+        ]);
+
+        Carbon::setTestNow($baselineTime);
+
+        $payload = json_encode([
+            'type'               => 'NODE_OFFLINE',
+            'room_id'            => (string) $this->room->id,
+            'message'            => 'Node sensor terputus; sumber dipindahkan ke Remote',
+            'offline_for_ms'     => 60000,
+            'offline_timeout_ms' => 60000,
+        ]);
+
+        $res = $this->mqttCommand->handleNotification("room/{$this->room->id}/notification", $payload);
+        $this->assertTrue($res);
+
+        $this->assertDatabaseHas('notifications', [
+            'room_id' => $this->room->id,
+            'type'    => 'NODE_OFFLINE',
+            'title'   => 'Node Sensor Terputus',
+        ]);
+
+        Bus::assertDispatched(SendFcmNotificationJob::class);
+
+        $latestLog = AcLog::where('room_id', $this->room->id)->latest('created_at')->first();
+        $this->assertEquals('REMOTE', $latestLog->control_source);
+        $this->assertFalse($latestLog->node_connected);
+        $this->assertTrue($latestLog->node_paired);
+        $this->assertFalse($latestLog->node_battery_low);
+
+        Carbon::setTestNow();
+    }
+
+    // ── 14. Offline sah mengubah sumber menjadi REMOTE, node_paired tetap true, test_complete tidak berubah ─
+    #[Test]
+    public function confirmed_offline_sets_remote_keeps_node_paired_and_preserves_test_complete(): void
+    {
+        Bus::fake();
+
+        $baselineTime = Carbon::now();
+        Carbon::setTestNow($baselineTime->copy()->subSeconds(80));
+
+        // Sample link metrics lama
+        $sample = NodeLinkSample::create([
+            'room_id'              => $this->room->id,
+            'session_id'           => 554433,
+            'telemetry_seq'        => 3,
+            'telemetry_packet_seq' => 3,
+            'sent_total'           => 3,
+            'acked_total'          => 3,
+            'failed_total'         => 0,
+            'retries_total'        => 0,
+            'pdr'                  => 100.0,
+            'telemetry_acked'      => true,
+            'telemetry_received'   => true,
+            'battery_valid'        => true,
+            'battery_mv'           => 3700,
+            'battery_percent'      => 80,
+            'rssi_dbm'             => -70,
+            'test_complete'        => false,
+            'received_at'          => Carbon::now(),
+        ]);
+
+        AcLog::create([
+            'room_id'          => $this->room->id,
+            'ac_brand'         => $this->room->ac_brand,
+            'power'            => 'ON',
+            'setpoint'         => 24,
+            'mode'             => 'FUZZY',
+            'ac_mode'          => 'COOL',
+            'fan_speed'        => 'AUTO',
+            'swing'            => 'AUTO',
+            'control_source'   => 'USER_NODE',
+            'node_paired'      => true,
+            'node_connected'   => true,
+            'node_battery_low' => false,
+        ]);
+
+        Carbon::setTestNow($baselineTime);
+
+        $payload = json_encode([
+            'type'               => 'NODE_OFFLINE',
+            'room_id'            => (string) $this->room->id,
+            'message'            => 'Node sensor terputus',
+            'offline_for_ms'     => 65000,
+            'offline_timeout_ms' => 60000,
+        ]);
+
+        $res = $this->mqttCommand->handleNotification("room/{$this->room->id}/notification", $payload);
+        $this->assertTrue($res);
+
+        $latestLog = AcLog::where('room_id', $this->room->id)->latest('created_at')->first();
+        $this->assertEquals('REMOTE', $latestLog->control_source);
+        $this->assertFalse($latestLog->node_connected);
+        $this->assertTrue($latestLog->node_paired);
+        $this->assertFalse($latestLog->node_battery_low);
+
+        // test_complete pada NodeLinkSample tidak boleh diubah
+        $this->assertFalse($sample->fresh()->test_complete);
+
+        Carbon::setTestNow();
+    }
+
+    // ── 15. Handler telemetri, baterai, dan link metrics lama tidak rusak ─────
+    #[Test]
+    public function legacy_telemetry_battery_and_link_metrics_handlers_remain_functional(): void
+    {
+        // 1. Telemetri
+        $telemetryMsg = json_encode([
+            'suhu'       => 27.8,
+            'kelembaban' => 65.2,
+            'valid'      => true,
+        ]);
+        $this->assertTrue($this->mqttCommand->handleNodeTelemetry("room/{$this->room->id}/node/telemetry", $telemetryMsg));
+        $this->assertDatabaseHas('node_telemetry_statuses', [
+            'room_id'     => $this->room->id,
+            'valid'       => true,
+            'temperature' => 27.8,
+        ]);
+
+        // 2. Baterai
+        $batteryMsg = json_encode([
+            'version'    => 1,
+            'valid'      => true,
+            'millivolts' => 3850,
+            'percent'    => 90,
+        ]);
+        $this->assertTrue($this->mqttCommand->handleNodeBattery("room/{$this->room->id}/node/battery", $batteryMsg));
+        $this->assertDatabaseHas('node_battery_statuses', [
+            'room_id'    => $this->room->id,
+            'valid'      => true,
+            'millivolts' => 3850,
+            'percent'    => 90,
+        ]);
+
+        // 3. Link metrics
+        $linkMsg = json_encode([
+            'version'              => 1,
+            'session_id'           => 8877,
+            'telemetry_seq'        => 1,
+            'telemetry_packet_seq' => 1,
+            'sent_total'           => 1,
+            'acked_total'          => 1,
+            'failed_total'         => 0,
+            'retries_total'        => 0,
+            'telemetry_acked'      => true,
+            'telemetry_received'   => true,
+            'battery_valid'        => true,
+            'battery_mv'           => 3850,
+            'battery_percent'      => 90,
+            'rssi_dbm'             => -68,
+            'test_complete'        => false,
+        ]);
+        $this->assertTrue($this->mqttCommand->handleNodeLinkMetrics("room/{$this->room->id}/node/link_metrics", $linkMsg));
+        $this->assertDatabaseHas('node_link_samples', [
+            'room_id'       => $this->room->id,
+            'session_id'    => 8877,
+            'telemetry_seq' => 1,
+            'pdr'           => 100.0,
+        ]);
     }
 }
