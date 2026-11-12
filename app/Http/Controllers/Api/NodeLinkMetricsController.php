@@ -335,6 +335,195 @@ class NodeLinkMetricsController extends Controller
     }
 
     /**
+     * Export continuous raw samples across all sessions for a room within a time range.
+     * GET /api/v1/rooms/{roomId}/node-link-samples/export.csv
+     */
+    public function exportRawCsv(Request $request, int $roomId): StreamedResponse|JsonResponse
+    {
+        $room = $this->resolveRoom($roomId);
+
+        // 1. Timezone parameter validation (default: Asia/Jakarta)
+        $tzParam = $request->query('timezone', 'Asia/Jakarta');
+        if (!in_array($tzParam, timezone_identifiers_list(), true)) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => "Timezone '{$tzParam}' tidak valid.",
+            ], 422);
+        }
+
+        // 2. Parse and validate from and to parameters
+        $fromStr = $request->query('from');
+        $toStr   = $request->query('to');
+        $from    = null;
+        $to      = null;
+
+        if ($fromStr !== null && $fromStr !== '') {
+            try {
+                if (preg_match('/(Z|[+-]\d{2}(:?\d{2})?)$/i', trim($fromStr))) {
+                    $from = Carbon::parse($fromStr);
+                } else {
+                    $from = Carbon::parse($fromStr, $tzParam);
+                }
+            } catch (\Throwable $e) {
+                return response()->json([
+                    'status'  => 'error',
+                    'message' => "Parameter 'from' bukan format timestamp yang valid: {$fromStr}",
+                ], 422);
+            }
+        }
+
+        if ($toStr !== null && $toStr !== '') {
+            try {
+                if (preg_match('/(Z|[+-]\d{2}(:?\d{2})?)$/i', trim($toStr))) {
+                    $to = Carbon::parse($toStr);
+                } else {
+                    $to = Carbon::parse($toStr, $tzParam);
+                }
+            } catch (\Throwable $e) {
+                return response()->json([
+                    'status'  => 'error',
+                    'message' => "Parameter 'to' bukan format timestamp yang valid: {$toStr}",
+                ], 422);
+            }
+        }
+
+        if ($from !== null && $to !== null && $from->gt($to)) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => "Parameter 'from' ({$fromStr}) tidak boleh lebih besar dari 'to' ({$toStr}).",
+            ], 422);
+        }
+
+        // 3. Convert time filter to UTC for database query
+        $fromUtc = $from ? $from->copy()->setTimezone('UTC') : null;
+        $toUtc   = $to ? $to->copy()->setTimezone('UTC') : null;
+
+        $query = NodeLinkSample::where('room_id', $roomId);
+        if ($fromUtc) {
+            $query->where('received_at', '>=', $fromUtc);
+        }
+        if ($toUtc) {
+            $query->where('received_at', '<=', $toUtc);
+        }
+
+        // 4. Urutan data: received_at ASC, kemudian primary key ASC sebagai tie-breaker
+        $query->orderBy('received_at', 'asc')->orderBy('id', 'asc');
+
+        // 5. Nama file CSV
+        $tzDisplay = $tzParam === 'Asia/Jakarta' ? 'WIB' : str_replace(['/', ' ', ':'], '_', $tzParam);
+        $fromLabel = $from ? $from->copy()->setTimezone($tzParam)->format('Y-m-d_His') : 'start';
+        $toLabel   = $to ? $to->copy()->setTimezone($tzParam)->format('Y-m-d_His') : 'latest';
+        $fileName  = "node_link_raw_room_{$roomId}_{$fromLabel}_to_{$toLabel}_{$tzDisplay}.csv";
+
+        $headers = [
+            'Content-Type'        => 'text/csv; charset=UTF-8',
+            'Content-Disposition' => "attachment; filename=\"{$fileName}\"",
+            'Pragma'              => 'no-cache',
+            'Cache-Control'       => 'must-revalidate, post-check=0, pre-check=0',
+            'Expires'             => '0',
+        ];
+
+        return response()->stream(function () use ($query) {
+            $file = fopen('php://output', 'w');
+            // BOM UTF-8 for Excel & UTF-8 compliance
+            fputs($file, "\xEF\xBB\xBF");
+
+            fputcsv($file, [
+                'Row_ID',
+                'Timestamp_UTC',
+                'Timestamp_WIB',
+                'Room_ID',
+                'Boot_Session_ID',
+                'Telemetry_Seq',
+                'Telemetry_Packet_Seq',
+                'Temperature_C',
+                'Humidity_Percent',
+                'Battery_mV',
+                'Battery_Percent',
+                'RSSI_dBm',
+                'Delivery_Success',
+                'Telemetry_Received',
+                'Sensor_Valid',
+                'Sent_Total',
+                'Acked_Total',
+                'Failed_Total',
+                'Retries_Total',
+                'PDR_At_Sample_Percent',
+                'Test_Complete',
+            ]);
+
+            $query->chunk(500, function ($samples) use ($file) {
+                foreach ($samples as $s) {
+                    $utcTs = Carbon::parse($s->received_at, 'UTC')->utc()->toIso8601ZuluString();
+                    $wibTs = Carbon::parse($s->received_at, 'UTC')->setTimezone('Asia/Jakarta')->format('Y-m-d H:i:s');
+
+                    $tempC = ($s->sensor_valid && $s->temperature_c !== null)
+                        ? number_format((float) $s->temperature_c, 2, '.', '')
+                        : '';
+
+                    $humPct = ($s->sensor_valid && $s->humidity_percent !== null)
+                        ? number_format((float) $s->humidity_percent, 2, '.', '')
+                        : '';
+
+                    $batteryMv = ($s->battery_valid && $s->battery_mv !== null)
+                        ? (string) $s->battery_mv
+                        : '';
+
+                    $batteryPct = ($s->battery_valid && $s->battery_percent !== null)
+                        ? (string) $s->battery_percent
+                        : '';
+
+                    $rssiDbm = ($s->telemetry_received && $s->rssi_dbm !== null)
+                        ? (string) $s->rssi_dbm
+                        : '';
+
+                    $sentTotal    = (int) $s->sent_total;
+                    $ackedTotal   = (int) $s->acked_total;
+                    $failedTotal  = (int) $s->failed_total;
+                    $retriesTotal = (int) $s->retries_total;
+
+                    if ($sentTotal > 0) {
+                        $pdrAtSample = sprintf('%.3f', round(100.0 * $ackedTotal / $sentTotal, 3));
+                    } else {
+                        $pdrAtSample = '';
+                    }
+
+                    fputcsv($file, [
+                        $s->id,
+                        $utcTs,
+                        $wibTs,
+                        $s->room_id,
+                        $s->session_id,
+                        $s->telemetry_seq,
+                        $s->telemetry_packet_seq,
+                        $tempC,
+                        $humPct,
+                        $batteryMv,
+                        $batteryPct,
+                        $rssiDbm,
+                        $s->telemetry_acked ? 'TRUE' : 'FALSE',
+                        $s->telemetry_received ? 'TRUE' : 'FALSE',
+                        $s->sensor_valid ? 'TRUE' : 'FALSE',
+                        $sentTotal,
+                        $ackedTotal,
+                        $failedTotal,
+                        $retriesTotal,
+                        $pdrAtSample,
+                        $s->test_complete ? 'TRUE' : 'FALSE',
+                    ]);
+                }
+
+                if (function_exists('ob_flush')) {
+                    @ob_flush();
+                }
+                flush();
+            });
+
+            fclose($file);
+        }, 200, $headers);
+    }
+
+    /**
      * Compute cumulative summary for a session.
      */
     public function computeSessionSummary(int $roomId, int $sessionId): array

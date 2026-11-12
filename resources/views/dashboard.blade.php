@@ -549,6 +549,124 @@
                 @endif
             </div>
 
+            <!-- KARTU BARU: EKSPOR RAW KONTINU NODE (LINTAS BOOT / MULTI-SESSION) -->
+            <div class="bg-gradient-to-br from-emerald-950/40 via-slate-800/80 to-slate-900/90 border-2 border-emerald-500/40 rounded-2xl p-6 sm:p-7 shadow-2xl shadow-emerald-950/50 mb-8 backdrop-blur transition">
+                <div class="flex flex-col md:flex-row md:items-start justify-between gap-4 mb-6 pb-6 border-b border-emerald-500/20">
+                    <div class="flex items-start space-x-4">
+                        <div class="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center justify-center text-2xl sm:text-3xl shrink-0 shadow-lg shadow-emerald-500/20">
+                            📈
+                        </div>
+                        <div>
+                            <div class="flex items-center space-x-2">
+                                <span class="px-2 py-0.5 rounded text-[10px] font-extrabold tracking-wider uppercase bg-emerald-600 text-white shadow-sm">Lintas Boot</span>
+                                <h3 class="text-lg sm:text-xl font-extrabold text-white">Ekspor Raw Kontinu Node</h3>
+                            </div>
+                            <p class="text-xs sm:text-sm text-slate-300 mt-1 leading-relaxed">
+                                Unduh seluruh sampel telemetri & link metrics dari semua Boot Session ID dalam rentang waktu yang dipilih sebagai satu linimasa kontinu tanpa baris SUMMARY.
+                            </p>
+                            <div class="mt-3 flex flex-wrap gap-2 text-[11px] text-emerald-300/90">
+                                <span class="inline-flex items-center space-x-1 bg-emerald-950/60 px-2.5 py-1 rounded-lg border border-emerald-500/30">
+                                    <span>🔄</span>
+                                    <span>Pergantian Boot_Session_ID menunjukkan Node restart (brownout/reset)</span>
+                                </span>
+                                <span class="inline-flex items-center space-x-1 bg-emerald-950/60 px-2.5 py-1 rounded-lg border border-emerald-500/30">
+                                    <span>📋</span>
+                                    <span>Format CSV Raw Murni: 100% sampel asli tanpa baris SUMMARY</span>
+                                </span>
+                                <span class="inline-flex items-center space-x-1 bg-emerald-950/60 px-2.5 py-1 rounded-lg border border-emerald-500/30">
+                                    <span>⏱️</span>
+                                    <span>Diurutkan berdasarkan waktu penerimaan (received_at ASC)</span>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Form Filter Waktu & Tombol Unduh -->
+                <div class="bg-slate-900/70 p-5 rounded-xl border border-emerald-500/20 space-y-4">
+                    <div class="flex flex-wrap items-center gap-2 mb-2">
+                        <span class="text-xs font-semibold text-slate-400">Pilihan Cepat Rentang Waktu:</span>
+                        <button type="button" onclick="setRawPreset('today')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-lg border border-slate-700 transition">Hari Ini</button>
+                        <button type="button" onclick="setRawPreset('24h')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-lg border border-slate-700 transition">24 Jam Terakhir</button>
+                        <button type="button" onclick="setRawPreset('7d')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-lg border border-slate-700 transition">7 Hari Terakhir</button>
+                        <button type="button" onclick="setRawPreset('all')" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded-lg border border-slate-700 transition">Semua Data</button>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
+                        <div class="lg:col-span-2">
+                            <label for="rawFrom" class="block text-xs font-bold text-slate-300 mb-1">Waktu Awal (WIB):</label>
+                            <input type="datetime-local" id="rawFrom" step="1" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-emerald-500 transition">
+                        </div>
+                        <div class="lg:col-span-2">
+                            <label for="rawTo" class="block text-xs font-bold text-slate-300 mb-1">Waktu Akhir (WIB):</label>
+                            <input type="datetime-local" id="rawTo" step="1" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-emerald-500 transition">
+                        </div>
+                        <div class="lg:col-span-1">
+                            <button type="button" onclick="downloadRawContinuousCsv()" id="btnDownloadRawContinuous" class="w-full inline-flex items-center justify-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:from-emerald-700 active:to-teal-700 text-white text-xs font-bold rounded-xl shadow-lg shadow-emerald-600/30 transition">
+                                <span>📥</span>
+                                <span>Unduh CSV Raw</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Panduan Python / Pandas untuk Menghitung PDR Keseluruhan -->
+                <div class="mt-5 bg-slate-900/60 border border-slate-800/80 rounded-xl p-4">
+                    <details class="group">
+                        <summary class="flex items-center justify-between cursor-pointer list-none text-xs font-bold text-emerald-300 hover:text-emerald-200">
+                            <span class="flex items-center space-x-2">
+                                <span>🐍</span>
+                                <span>Panduan Analisis Python Pandas: Menghitung PDR Keseluruhan Lintas Boot</span>
+                            </span>
+                            <span class="transition group-open:rotate-180 text-xs text-slate-500">▼</span>
+                        </summary>
+                        <div class="mt-3 pt-3 border-t border-slate-800 text-xs text-slate-300 space-y-3 font-mono leading-relaxed">
+                            <p class="text-slate-400 font-sans text-xs">
+                                Karena CSV raw ini menggabungkan seluruh boot tanpa baris SUMMARY, gunakan agregasi per <code>Boot_Session_ID</code> untuk menjumlahkan counter final setiap boot dan menghitung PDR total yang akurat:
+                            </p>
+                            <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 overflow-x-auto text-emerald-400">
+                                <pre><code>import pandas as pd
+
+df = pd.read_csv("node_link_raw.csv")
+
+per_boot = (
+    df.groupby("Boot_Session_ID", dropna=False)
+      .agg(
+          Sent=("Sent_Total", "max"),
+          Acked=("Acked_Total", "max"),
+          Failed=("Failed_Total", "max"),
+          Retries=("Retries_Total", "max"),
+      )
+)
+
+sent_total = per_boot["Sent"].sum()
+acked_total = per_boot["Acked"].sum()
+failed_total = per_boot["Failed"].sum()
+retries_total = per_boot["Retries"].sum()
+
+pdr_total = (
+    acked_total / sent_total * 100
+    if sent_total > 0
+    else None
+)
+
+print("Total dikirim:", sent_total)
+print("Total ACK:", acked_total)
+print("Total gagal:", failed_total)
+print("Total retry:", retries_total)
+print("PDR keseluruhan:", pdr_total)</code></pre>
+                            </div>
+                            <div class="text-[11px] text-slate-400 space-y-1 font-sans">
+                                <p>&bull; <strong>Perhitungan ini menggabungkan seluruh boot Node</strong> menjadi satu rangkaian linimasa pengujian.</p>
+                                <p>&bull; <strong>Boot_Session_ID tidak dianggap sebagai eksperimen terpisah</strong>, melainkan siklus hidup daya (power cycle).</p>
+                                <p>&bull; <strong>Pergantian Boot_Session_ID tetap dipertahankan</strong> sebagai penanda histori restart/brownout.</p>
+                                <p>&bull; Jika paket link metrics tidak pernah diterima Remote sebelum reset, backend tidak menciptakan data sintetis.</p>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+            </div>
+
             @if(empty($sessions))
                 <div class="bg-slate-800/40 border border-slate-800 rounded-2xl p-8 text-center text-slate-400 text-sm">
                     Belum ada sesi link metrics yang tercatat untuk ruangan ini.
@@ -787,6 +905,53 @@ print("RSSI valid terbaru (dBm):", summary["RSSI_Latest_dBm"])</code></pre>
             }
 
             const url = endpoint + (params.length ? '?' + params.join('&') : '');
+            window.location.href = url;
+        }
+
+        function setRawPreset(preset) {
+            const now = new Date();
+            const pad = (n) => String(n).padStart(2, '0');
+            const toInputFormat = (d) => {
+                return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+            };
+
+            const fromEl = document.getElementById('rawFrom');
+            const toEl = document.getElementById('rawTo');
+
+            if (preset === 'all') {
+                fromEl.value = '';
+                toEl.value = '';
+                return;
+            }
+
+            toEl.value = toInputFormat(now);
+            const from = new Date(now);
+
+            if (preset === 'today') {
+                from.setHours(0, 0, 0, 0);
+            } else if (preset === '24h') {
+                from.setTime(now.getTime() - 24 * 3600 * 1000);
+            } else if (preset === '7d') {
+                from.setTime(now.getTime() - 7 * 24 * 3600 * 1000);
+            }
+            fromEl.value = toInputFormat(from);
+        }
+
+        function downloadRawContinuousCsv() {
+            const fromVal = document.getElementById('rawFrom').value;
+            const toVal = document.getElementById('rawTo').value;
+
+            let params = ['timezone=Asia/Jakarta'];
+            if (fromVal) {
+                const formattedFrom = fromVal.length === 16 ? `${fromVal}:00+07:00` : (fromVal.includes('+') || fromVal.endsWith('Z') ? fromVal : `${fromVal}+07:00`);
+                params.push(`from=${encodeURIComponent(formattedFrom)}`);
+            }
+            if (toVal) {
+                const formattedTo = toVal.length === 16 ? `${toVal}:00+07:00` : (toVal.includes('+') || toVal.endsWith('Z') ? toVal : `${toVal}+07:00`);
+                params.push(`to=${encodeURIComponent(formattedTo)}`);
+            }
+
+            const url = `/api/v1/rooms/${roomId}/node-link-samples/export.csv?` + params.join('&');
             window.location.href = url;
         }
     </script>

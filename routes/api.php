@@ -50,6 +50,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/node-telemetry/export.csv', [TelemetryController::class, 'exportNodeTelemetryCsv']);
         Route::get('/sensor-sources/export.csv', [TelemetryController::class, 'exportSensorSourcesCsv']);
         Route::get('/node-link-sessions/{sessionId}/export.csv', [NodeLinkMetricsController::class, 'exportCsv']);
+        Route::get('/node-link-samples/export.csv', [NodeLinkMetricsController::class, 'exportRawCsv']);
         Route::post('/sensors', [TelemetryController::class, 'storeSensorLog']);
         Route::post('/occupancy', [TelemetryController::class, 'storeOccupancyLog']);
         Route::post('/ac-status', [TelemetryController::class, 'storeAcLog']);
